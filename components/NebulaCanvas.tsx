@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { AnimationConfig, ParticleConfig, NebulaAnalysis, Particle, VideoConfig } from '../types';
 import { PlayIcon, PauseIcon, ArrowPathIcon } from '@heroicons/react/24/solid';
@@ -13,6 +12,7 @@ interface NebulaCanvasProps {
   isRecording: boolean;
   onRecordingComplete: (url: string) => void;
   triggerPreview: number; 
+  zoomOrigin: { x: number; y: number }; // Received from parent
   onSetZoomOrigin?: (x: number, y: number) => void;
 }
 
@@ -26,6 +26,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   isRecording,
   onRecordingComplete,
   triggerPreview,
+  zoomOrigin,
   onSetZoomOrigin
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -228,8 +229,10 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
     const cW = canvas.width;
     const cH = canvas.height;
-    const zOriginX = animationConfig.zoomOrigin.x * cW;
-    const zOriginY = animationConfig.zoomOrigin.y * cH;
+    
+    // Use passed Zoom Origin
+    const zOriginX = zoomOrigin.x * cW;
+    const zOriginY = zoomOrigin.y * cH;
 
     const elapsedSeconds = progress * animationConfig.duration;
 
@@ -281,8 +284,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       spriteScaleMultiplier = 1.0 + feathering;
     } else {
       // Negative: Contraction/Sharpening
-      // We do NOT shrink the sprite scale (which would shrink the core).
-      // We rely on the sprite gradient tightening (handled in createStarSprite) to create the sharpening effect.
       spriteScaleMultiplier = 1.0;
     }
 
@@ -299,7 +300,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         if (p.color) {
            sprite = createStarSprite(p.color, feathering);
         } else {
-           // If using default, make sure it matches current feathering
            sprite = createStarSprite(particleConfig.color, feathering);
         }
         if (!sprite) continue;
@@ -354,7 +354,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       ctx.restore();
     }
 
-  }, [animationConfig, particleConfig, activeParticles, isRecording, imageBase64]);
+  }, [animationConfig, particleConfig, activeParticles, isRecording, imageBase64, zoomOrigin]);
 
   const animate = useCallback((time: number) => {
     if (!lastTimeRef.current) lastTimeRef.current = time;
@@ -392,73 +392,88 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     };
   }, [animate]);
 
-  // Video Recording Logic
+  // Video Recording Logic - FIX for 0-byte issue
   useEffect(() => {
+    let timeout: ReturnType<typeof setTimeout>;
+    
     if (isRecording) {
+      // 1. Reset Playback
       setPlaybackProgress(0);
       setIsPlaying(true);
       lastTimeRef.current = 0;
+      chunksRef.current = []; // STRICT RESET
 
       const canvas = canvasRef.current;
       if (!canvas) return;
-
-      const stream = canvas.captureStream(30);
       
-      let mimeType = 'video/webm;codecs=vp9';
-      const requestedFormat = videoConfig.format;
-
-      if (requestedFormat === 'mp4' || requestedFormat === 'mov') {
-         if (MediaRecorder.isTypeSupported('video/mp4')) {
-             mimeType = 'video/mp4'; 
-         } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
-             mimeType = 'video/mp4;codecs=h264,aac';
+      // 2. WAIT for canvas to settle/redraw at least once
+      // This timeout ensures the canvas resize (triggered by updateCanvasSize) has finished painting
+      timeout = setTimeout(() => {
+         // Create Stream
+         const stream = canvas.captureStream(30);
+         
+         // Format Selection Logic
+         let mimeType = 'video/webm;codecs=vp9';
+         const requestedFormat = videoConfig.format;
+         if (requestedFormat === 'mp4' || requestedFormat === 'mov') {
+            if (MediaRecorder.isTypeSupported('video/mp4')) {
+                mimeType = 'video/mp4'; 
+            } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
+                mimeType = 'video/mp4;codecs=h264,aac';
+            }
+         } else if (requestedFormat === 'mkv') {
+            if (MediaRecorder.isTypeSupported('video/x-matroska')) {
+                mimeType = 'video/x-matroska';
+            }
          }
-      } else if (requestedFormat === 'mkv') {
-         if (MediaRecorder.isTypeSupported('video/x-matroska')) {
-             mimeType = 'video/x-matroska';
+
+         const options: MediaRecorderOptions = {
+           mimeType: mimeType,
+           bitsPerSecond: videoConfig.bitrate * 1000000 
+         };
+
+         let recorder: MediaRecorder;
+         try {
+           recorder = new MediaRecorder(stream, options);
+         } catch (e) {
+           console.warn('Failed to create recorder with options', options, e);
+           recorder = new MediaRecorder(stream);
          }
-      }
+         
+         mediaRecorderRef.current = recorder;
 
-      const options: MediaRecorderOptions = {
-        mimeType: mimeType,
-        bitsPerSecond: videoConfig.bitrate * 1000000 
-      };
+         recorder.ondataavailable = (e) => {
+           if (e.data.size > 0) chunksRef.current.push(e.data);
+         };
 
-      let recorder: MediaRecorder;
-      try {
-        recorder = new MediaRecorder(stream, options);
-      } catch (e) {
-        console.warn('Failed to create recorder with options', options, e);
-        recorder = new MediaRecorder(stream);
-      }
-      
-      mediaRecorderRef.current = recorder;
-      chunksRef.current = [];
+         recorder.onstop = () => {
+           const blobType = mediaRecorderRef.current?.mimeType || 'video/webm';
+           const blob = new Blob(chunksRef.current, { type: blobType });
+           const url = URL.createObjectURL(blob);
+           onRecordingComplete(url);
+           setIsPlaying(false);
+         };
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
+         // Start
+         if (recorder.state === 'inactive') {
+            recorder.start();
+         }
 
-      recorder.onstop = () => {
-        const blobType = mediaRecorderRef.current?.mimeType || 'video/webm';
-        const blob = new Blob(chunksRef.current, { type: blobType });
-        const url = URL.createObjectURL(blob);
-        onRecordingComplete(url);
-        setIsPlaying(false);
-      };
+         // Stop Schedule
+         const durationMs = animationConfig.duration * 1000;
+         setTimeout(() => {
+           if (recorder.state === 'recording') recorder.stop();
+         }, durationMs + 500); 
 
-      recorder.start();
-      
-      const durationMs = animationConfig.duration * 1000;
-      const timeout = setTimeout(() => {
-        if (recorder.state === 'recording') recorder.stop();
-      }, durationMs + 500); 
-
-      return () => {
-        clearTimeout(timeout);
-        if (recorder.state === 'recording') recorder.stop();
-      };
+      }, 500); // 500ms delay to ensure canvas is ready
     }
+
+    return () => {
+      if (timeout) clearTimeout(timeout);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+    };
   }, [isRecording, animationConfig.duration, videoConfig.bitrate, videoConfig.format, onRecordingComplete]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {

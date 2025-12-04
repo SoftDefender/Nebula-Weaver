@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { ParticleConfig, AnimationConfig, VideoConfig, Particle, ExportFormat, BatchItem } from './types';
 import NebulaCanvas from './components/NebulaCanvas';
 import { analyzeNebulaImage, identifyNebulaFromImage } from './services/geminiService';
@@ -15,7 +15,8 @@ import {
   VideoCameraIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  Square2StackIcon
+  Square2StackIcon,
+  ArrowDownTrayIcon
 } from '@heroicons/react/24/solid';
 
 const App: React.FC = () => {
@@ -29,6 +30,8 @@ const App: React.FC = () => {
   const [analysisStep, setAnalysisStep] = useState('');
   
   const [isGenerating, setIsGenerating] = useState(false);
+  const [batchExportIndex, setBatchExportIndex] = useState<number | null>(null);
+
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [previewTrigger, setPreviewTrigger] = useState(0);
   
@@ -47,7 +50,7 @@ const App: React.FC = () => {
     rotationDirection: 'cw',
     rotationSpeed: 0.5,
     duration: 5,
-    zoomOrigin: { x: 0.5, y: 0.5 }
+    // zoomOrigin removed from global config
   });
 
   const [videoConfig, setVideoConfig] = useState<VideoConfig>({
@@ -78,7 +81,8 @@ const App: React.FC = () => {
             imageBase64: reader.result as string,
             status: 'idle',
             detectedParticles: null,
-            detectionMode: 'procedural'
+            detectionMode: 'procedural',
+            zoomOrigin: { x: 0.5, y: 0.5 } // Default Center
           });
         };
         reader.readAsDataURL(file);
@@ -206,19 +210,68 @@ const App: React.FC = () => {
     });
   };
 
+  // --- Export Logic ---
+  
+  // Single Export
   const handleGenerateVideo = () => {
     if (!activeItem) return;
     setIsGenerating(true);
     setVideoUrl(null);
   };
 
-  const handleRecordingComplete = (url: string) => {
-    setIsGenerating(false);
-    setVideoUrl(url);
+  // Batch Export Trigger
+  const handleExportAll = () => {
+    if (batchItems.length === 0) return;
+    setBatchExportIndex(0); // Start Queue
   };
 
+  // Batch Export Effect Loop
+  useEffect(() => {
+    if (batchExportIndex !== null) {
+      // 1. Switch to the target item
+      if (activeIndex !== batchExportIndex) {
+         setActiveIndex(batchExportIndex);
+         return; // Wait for next render
+      }
+
+      // 2. Wait a tick to ensure Canvas prop updates, then Start Generation
+      if (!isGenerating) {
+         setIsGenerating(true);
+         setVideoUrl(null);
+      }
+    }
+  }, [batchExportIndex, activeIndex, isGenerating]);
+
+  // Export Completion Handler
+  const handleRecordingComplete = useCallback((url: string) => {
+    setIsGenerating(false);
+    
+    // Auto Download Helper
+    const downloadLink = document.createElement('a');
+    downloadLink.href = url;
+    downloadLink.download = `${batchItems[activeIndex]?.name || 'nebula'}-animation.${videoConfig.format}`;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+
+    setVideoUrl(url); // For single view display
+
+    // If Batch Exporting, Move Next
+    if (batchExportIndex !== null) {
+      if (batchExportIndex < batchItems.length - 1) {
+        // Move to next after a short delay
+        setTimeout(() => setBatchExportIndex(prev => (prev !== null ? prev + 1 : null)), 500);
+      } else {
+        // Finished
+        setBatchExportIndex(null);
+      }
+    }
+  }, [batchExportIndex, batchItems, activeIndex, videoConfig.format]);
+
+
   const handleSetZoomOrigin = (x: number, y: number) => {
-    setAnimationConfig(prev => ({ ...prev, zoomOrigin: { x, y } }));
+    // Update PER ITEM
+    updateActiveItem({ zoomOrigin: { x, y } });
   };
 
   const handlePrev = () => {
@@ -263,7 +316,8 @@ const App: React.FC = () => {
                 multiple
                 accept="image/*"
                 onChange={handleImageUpload}
-                className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-space-700 file:text-white hover:file:bg-space-600 cursor-pointer"
+                disabled={batchExportIndex !== null || isAnalyzing}
+                className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-space-700 file:text-white hover:file:bg-space-600 cursor-pointer disabled:opacity-50"
               />
               <p className="text-[10px] text-gray-500 mt-1">Select multiple files to enable batch mode.</p>
             </div>
@@ -279,8 +333,12 @@ const App: React.FC = () => {
                     value={activeItem.name}
                     onChange={(e) => updateActiveItem({ name: e.target.value })}
                     placeholder={activeItem.identifiedName || "e.g. Orion Nebula"}
-                    className="w-full bg-space-900 border border-space-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-space-accent placeholder-gray-600"
+                    disabled={batchItems.length > 1} // Disabled in batch mode per request
+                    className="w-full bg-space-900 border border-space-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-space-accent placeholder-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
+                  {batchItems.length > 1 && (
+                     <div className="absolute right-2 top-2 text-xs text-gray-500">Auto-Managed</div>
+                  )}
                 </div>
                 
                 {activeItem.identifiedName && batchItems.length === 1 && (
@@ -302,7 +360,7 @@ const App: React.FC = () => {
             <div className="space-y-2">
               <button 
                 onClick={handleBatchAnalysis}
-                disabled={isAnalyzing || batchItems.length === 0}
+                disabled={isAnalyzing || batchItems.length === 0 || batchExportIndex !== null}
                 className={`w-full py-2 rounded-lg font-medium flex items-center justify-center gap-2 transition-all ${
                   isAnalyzing 
                     ? 'bg-space-700 cursor-not-allowed text-gray-400' 
@@ -365,7 +423,7 @@ const App: React.FC = () => {
            <div className="bg-space-800/50 border border-space-700 rounded-xl p-1 backdrop-blur-md shadow-2xl relative group">
              
              {/* Navigation Arrows for Batch */}
-             {batchItems.length > 1 && !isGenerating && (
+             {batchItems.length > 1 && !isGenerating && batchExportIndex === null && (
                <>
                  <button 
                    onClick={handlePrev}
@@ -397,22 +455,36 @@ const App: React.FC = () => {
                 isRecording={isGenerating}
                 onRecordingComplete={handleRecordingComplete}
                 triggerPreview={previewTrigger}
+                zoomOrigin={activeItem?.zoomOrigin || { x: 0.5, y: 0.5 }}
                 onSetZoomOrigin={handleSetZoomOrigin}
              />
              
              {isGenerating && (
                 <div className="absolute inset-0 z-50 bg-black/80 flex flex-col items-center justify-center backdrop-blur-sm rounded-lg">
                    <div className="w-16 h-16 border-4 border-space-700 border-t-space-accent rounded-full animate-spin mb-4" />
-                   <h3 className="text-xl font-bold text-white">Rendering Video...</h3>
+                   <h3 className="text-xl font-bold text-white">
+                     {batchExportIndex !== null ? `Batch Exporting (${activeIndex + 1}/${batchItems.length})...` : 'Rendering Video...'}
+                   </h3>
                    <p className="text-gray-400">Resolution: {videoConfig.resolution} • {videoConfig.format.toUpperCase()}</p>
                 </div>
              )}
           </div>
 
           <div className="flex gap-4">
+             {batchItems.length > 1 && (
+               <button 
+                  onClick={handleExportAll}
+                  disabled={isGenerating || batchItems.length === 0 || batchExportIndex !== null}
+                  className="flex-1 py-3 md:py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 md:gap-3 transition-all bg-space-800 hover:bg-space-700 text-white border border-space-700"
+               >
+                  <ArrowDownTrayIcon className="w-5 h-5 md:w-6 md:h-6" />
+                  {batchExportIndex !== null ? 'Exporting All...' : 'Export All'}
+               </button>
+             )}
+
              <button 
                 onClick={handleGenerateVideo}
-                disabled={isGenerating || !activeItem}
+                disabled={isGenerating || !activeItem || batchExportIndex !== null}
                 className={`flex-1 py-3 md:py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 md:gap-3 transition-all ${
                   !activeItem
                   ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
@@ -420,11 +492,11 @@ const App: React.FC = () => {
                 }`}
              >
                 <FilmIcon className="w-5 h-5 md:w-6 md:h-6" />
-                {isGenerating ? 'Processing...' : `Export Current (${videoConfig.format.toUpperCase()})`}
+                {isGenerating && batchExportIndex === null ? 'Processing...' : `Export Current (${videoConfig.format.toUpperCase()})`}
              </button>
           </div>
 
-          {videoUrl && (
+          {videoUrl && batchExportIndex === null && (
             <div className="animate-fade-in-up bg-space-800/50 border border-space-700 rounded-xl p-4 md:p-6">
               <h3 className="text-lg font-bold mb-4 text-green-400 flex items-center gap-2">
                  <span>✓</span> Generation Complete

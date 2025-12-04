@@ -22,7 +22,7 @@ export interface AnimationConfig {
   rotationDirection: 'cw' | 'ccw'; // clockwise, counter-clockwise
   rotationSpeed: number;
   duration: number; // in seconds
-  zoomOrigin: { x: number; y: number }; // Normalized 0-1, default 0.5, 0.5
+  // zoomOrigin removed from global config, now handled per BatchItem
 }
 
 export interface NebulaAnalysis {
@@ -40,6 +40,7 @@ export interface BatchItem {
   analysis?: NebulaAnalysis;
   detectedParticles: Particle[] | null;
   detectionMode: 'real' | 'ai-map' | 'procedural';
+  zoomOrigin?: { x: number; y: number }; // Per-image zoom center
 }
 
 export interface Particle {
