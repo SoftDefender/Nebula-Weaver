@@ -1,0 +1,5 @@
+{
+  "name": "Nebula Weaver",
+  "description": "An interactive nebula video generator using Gemini for star map analysis and Canvas for real-time particle animation and video rendering.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,490 @@
+
+import React, { useState, useCallback } from 'react';
+import { ParticleConfig, AnimationConfig, NebulaData, VideoConfig, Particle } from './types';
+import NebulaCanvas from './components/NebulaCanvas';
+import { analyzeNebulaImage } from './services/geminiService';
+import { detectStarsFromImage } from './services/starDetectionService';
+import { 
+  SparklesIcon, 
+  FilmIcon, 
+  ArrowPathIcon, 
+  CloudArrowUpIcon,
+  PlayIcon,
+  Cog6ToothIcon,
+  AdjustmentsHorizontalIcon,
+  VideoCameraIcon
+} from '@heroicons/react/24/solid';
+
+const App: React.FC = () => {
+  // Data State
+  const [nebulaData, setNebulaData] = useState<NebulaData>({
+    name: '',
+    imageBase64: null,
+  });
+  
+  // UI State
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [previewTrigger, setPreviewTrigger] = useState(0);
+  const [analysisStatus, setAnalysisStatus] = useState<'none' | 'success' | 'error'>('none');
+  
+  // Star Detection State
+  const [detectedParticles, setDetectedParticles] = useState<Particle[] | null>(null);
+  const [detectionMode, setDetectionMode] = useState<'real' | 'procedural'>('procedural');
+
+  // Configuration State
+  const [particleConfig, setParticleConfig] = useState<ParticleConfig>({
+    density: 150,
+    baseSize: 1.0,
+    brightness: 0.8,
+    color: '#ffffff',
+  });
+
+  const [animationConfig, setAnimationConfig] = useState<AnimationConfig>({
+    initialScale: 1.0,
+    finalScale: 1.5,
+    rotationDirection: 'cw',
+    rotationSpeed: 0.5,
+    duration: 5,
+  });
+
+  const [videoConfig, setVideoConfig] = useState<VideoConfig>({
+    resolution: '1080p',
+    bitrate: 5, // 5 Mbps default
+  });
+
+  // Handlers
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setNebulaData(prev => ({ ...prev, imageBase64: reader.result as string }));
+        setAnalysisStatus('none');
+        setDetectedParticles(null);
+        setDetectionMode('procedural');
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleAnalysis = async () => {
+    if (!nebulaData.imageBase64 || !nebulaData.name) {
+      alert("Please upload an image and enter a name.");
+      return;
+    }
+    
+    setIsAnalyzing(true);
+    setAnalysisStatus('none');
+    try {
+      // 1. Gemini Analysis for description and metadata
+      const analysisResult = await analyzeNebulaImage(nebulaData.imageBase64, nebulaData.name);
+      
+      // 2. Star Detection Analysis (StarNet logic)
+      const stars = await detectStarsFromImage(nebulaData.imageBase64);
+      
+      setNebulaData(prev => ({ ...prev, analysis: analysisResult }));
+      
+      // 3. Fallback Logic: If too few stars found, fallback to procedural
+      if (stars.length > 50) {
+        setDetectedParticles(stars);
+        setDetectionMode('real');
+      } else {
+        setDetectedParticles(null);
+        setDetectionMode('procedural');
+        console.log('Low star count detected, reverting to procedural generation.');
+      }
+
+      setAnalysisStatus('success');
+      setPreviewTrigger(t => t + 1);
+    } catch (e) {
+      console.error(e);
+      setAnalysisStatus('error');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleGenerateVideo = () => {
+    if (!nebulaData.imageBase64) return;
+    setIsGenerating(true);
+    setVideoUrl(null);
+  };
+
+  const handleRecordingComplete = (url: string) => {
+    setIsGenerating(false);
+    setVideoUrl(url);
+  };
+
+  return (
+    <div className="min-h-screen bg-space-900 text-white p-4 md:p-6 lg:p-8">
+      <header className="max-w-7xl mx-auto mb-6 md:mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-space-accent to-purple-600 flex items-center justify-center shadow-lg shadow-space-accent/20 flex-shrink-0">
+            <SparklesIcon className="w-6 h-6 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-center md:text-left">Nebula Weaver</h1>
+        </div>
+        <div className="text-xs text-space-highlight bg-space-800 px-3 py-1 rounded-full border border-space-700 whitespace-nowrap">
+          Powered by Gemini 2.5
+        </div>
+      </header>
+
+      {/* Grid Layout */}
+      <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        {/* Section 1: Upload & Identify */}
+        <section className="lg:col-span-4 bg-space-800/50 border border-space-700 rounded-xl p-5 md:p-6 backdrop-blur-md h-fit">
+          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <CloudArrowUpIcon className="w-5 h-5 text-space-accent" />
+            Source Material
+          </h2>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Nebula Image</label>
+              <input 
+                type="file" 
+                accept="image/*"
+                onChange={handleImageUpload}
+                className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-space-700 file:text-white hover:file:bg-space-600 cursor-pointer"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Nebula Name</label>
+              <input 
+                type="text" 
+                value={nebulaData.name}
+                onChange={(e) => setNebulaData(prev => ({...prev, name: e.target.value}))}
+                placeholder="e.g. Orion Nebula"
+                className="w-full bg-space-900 border border-space-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-space-accent"
+              />
+            </div>
+
+            <button 
+              onClick={handleAnalysis}
+              disabled={isAnalyzing || !nebulaData.imageBase64}
+              className={`w-full py-2 rounded-lg font-medium flex items-center justify-center gap-2 transition-all ${
+                isAnalyzing 
+                  ? 'bg-space-700 cursor-not-allowed text-gray-400' 
+                  : 'bg-space-accent hover:bg-indigo-500 text-white shadow-lg shadow-space-accent/25'
+              }`}
+            >
+              {isAnalyzing ? (
+                <>
+                  <ArrowPathIcon className="w-5 h-5 animate-spin" /> Identifying...
+                </>
+              ) : (
+                <>
+                  <SparklesIcon className="w-5 h-5" /> Identify & Analyze
+                </>
+              )}
+            </button>
+            
+            {analysisStatus === 'success' && (
+              <div className="p-3 bg-green-900/20 border border-green-700/50 rounded text-green-400 text-sm">
+                <div className="flex items-center gap-2 mb-1">
+                  <span>✓</span> Identification successful!
+                </div>
+                <div className="text-xs text-green-300 opacity-80">
+                  {detectionMode === 'real' 
+                    ? `Mapped ${detectedParticles?.length} real stars from image.` 
+                    : `Low star visibility. Using generated star field.`}
+                </div>
+              </div>
+            )}
+            {analysisStatus === 'error' && (
+              <div className="p-3 bg-red-900/20 border border-red-700/50 rounded text-red-400 text-sm">
+                Analysis failed. Please try again.
+              </div>
+            )}
+
+            {nebulaData.analysis && (
+              <div className="mt-2 p-3 bg-space-900/50 rounded border border-space-700 text-sm text-gray-300 italic">
+                "{nebulaData.analysis.description}"
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Section 2: Canvas & Output */}
+        <div className="lg:col-span-8 lg:row-span-2 flex flex-col gap-6">
+           <div className="bg-space-800/50 border border-space-700 rounded-xl p-1 backdrop-blur-md shadow-2xl relative group">
+             <NebulaCanvas 
+                imageBase64={nebulaData.imageBase64}
+                particleConfig={particleConfig}
+                animationConfig={animationConfig}
+                videoConfig={videoConfig}
+                analysis={nebulaData.analysis}
+                detectedParticles={detectedParticles}
+                isRecording={isGenerating}
+                onRecordingComplete={handleRecordingComplete}
+                triggerPreview={previewTrigger}
+             />
+             
+             <div className="absolute top-4 right-4 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                <button 
+                  onClick={() => setPreviewTrigger(t => t + 1)}
+                  className="bg-black/50 hover:bg-black/80 text-white px-3 py-1 rounded-full text-xs border border-white/20 backdrop-blur-md flex items-center gap-1"
+                >
+                  <PlayIcon className="w-3 h-3" /> Replay
+                </button>
+             </div>
+
+             {isGenerating && (
+                <div className="absolute inset-0 z-50 bg-black/80 flex flex-col items-center justify-center backdrop-blur-sm rounded-lg">
+                   <div className="w-16 h-16 border-4 border-space-700 border-t-space-accent rounded-full animate-spin mb-4" />
+                   <h3 className="text-xl font-bold text-white">Rendering Video...</h3>
+                   <p className="text-gray-400">Resolution: {videoConfig.resolution} • Bitrate: {videoConfig.bitrate}Mbps</p>
+                </div>
+             )}
+          </div>
+
+          <div className="flex gap-4">
+             <button 
+                onClick={handleGenerateVideo}
+                disabled={isGenerating || !nebulaData.imageBase64}
+                className={`flex-1 py-3 md:py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 md:gap-3 transition-all ${
+                  !nebulaData.imageBase64
+                  ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-space-accent to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white shadow-lg shadow-purple-900/50 hover:shadow-purple-900/80 transform hover:-translate-y-1 active:translate-y-0'
+                }`}
+             >
+                <FilmIcon className="w-5 h-5 md:w-6 md:h-6" />
+                {isGenerating ? 'Processing...' : 'Generate Video'}
+             </button>
+          </div>
+
+          {videoUrl && (
+            <div className="animate-fade-in-up bg-space-800/50 border border-space-700 rounded-xl p-4 md:p-6">
+              <h3 className="text-lg font-bold mb-4 text-green-400 flex items-center gap-2">
+                 <span>✓</span> Generation Complete
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+                 <video src={videoUrl} controls className="w-full rounded-lg shadow-lg border border-space-700 bg-black" />
+                 <div className="space-y-4">
+                    <p className="text-gray-300 text-sm">
+                      Your nebula animation is ready.
+                    </p>
+                    <a 
+                      href={videoUrl} 
+                      download={`${nebulaData.name || 'nebula'}-animation.webm`}
+                      className="block w-full text-center py-2 bg-space-700 hover:bg-space-600 text-white rounded-lg border border-space-600 transition-colors"
+                    >
+                      Download Video (.webm)
+                    </a>
+                    <button 
+                       onClick={() => setVideoUrl(null)}
+                       className="block w-full text-center text-sm text-gray-500 hover:text-white"
+                    >
+                       Dismiss
+                    </button>
+                 </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Section 3: Configuration */}
+        <section className="lg:col-span-4 bg-space-800/50 border border-space-700 rounded-xl p-5 md:p-6 backdrop-blur-md h-fit">
+          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <Cog6ToothIcon className="w-5 h-5 text-space-accent" />
+            Effect Configuration
+          </h2>
+
+          <div className="space-y-6">
+            
+            {/* Video Quality Settings */}
+            <div className="space-y-3">
+               <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                <VideoCameraIcon className="w-4 h-4" />
+                Video Output
+              </h3>
+              
+              <div className="bg-space-900/50 p-3 rounded-lg border border-space-700/50 space-y-4">
+                <div>
+                   <label className="block text-xs text-gray-400 mb-1">Resolution (Maintains Aspect Ratio)</label>
+                   <select 
+                      value={videoConfig.resolution}
+                      onChange={(e) => setVideoConfig({...videoConfig, resolution: e.target.value as any})}
+                      className="w-full bg-space-900 border border-space-700 rounded p-2 text-sm text-gray-200"
+                   >
+                      <option value="original">Original Image Size</option>
+                      <option value="1080p">1080p (Scaled)</option>
+                      <option value="4k">4K (Scaled)</option>
+                   </select>
+                </div>
+
+                <div>
+                  <label className="flex justify-between text-sm mb-1">
+                    <span>Bitrate</span>
+                    <span className="text-space-highlight">{videoConfig.bitrate} Mbps</span>
+                  </label>
+                  <input 
+                    type="range" min="1" max="50" step="1"
+                    value={videoConfig.bitrate}
+                    onChange={(e) => setVideoConfig({...videoConfig, bitrate: parseFloat(e.target.value)})}
+                    className="w-full accent-space-accent touch-pan-x"
+                  />
+                  <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                     <span>Low</span>
+                     <span>High Quality</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div className="h-px bg-space-700/50" />
+
+            {/* Particle Settings */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                  <AdjustmentsHorizontalIcon className="w-4 h-4" />
+                  Particle Effects
+                </h3>
+                {detectionMode === 'real' && (
+                  <span className="text-[10px] bg-indigo-900/50 text-indigo-300 border border-indigo-700 px-2 py-0.5 rounded">
+                    Mapped Mode
+                  </span>
+                )}
+              </div>
+              
+              <div className="bg-space-900/50 p-3 rounded-lg border border-space-700/50 space-y-4">
+                
+                <div className={detectionMode === 'real' ? 'opacity-50 pointer-events-none' : ''}>
+                  <label className="flex justify-between text-sm mb-1">
+                    <span>Density</span>
+                    <span className="text-space-highlight">{particleConfig.density}</span>
+                  </label>
+                  <input 
+                    type="range" min="0" max="500" step="10"
+                    value={particleConfig.density}
+                    onChange={(e) => setParticleConfig({...particleConfig, density: parseFloat(e.target.value)})}
+                    className="w-full accent-space-accent touch-pan-x"
+                  />
+                  {detectionMode === 'real' && <p className="text-[10px] text-indigo-300 mt-1">Using real star map</p>}
+                </div>
+
+                <div>
+                  <label className="flex justify-between text-sm mb-1">
+                    <span>Brightness</span>
+                    <span className="text-space-highlight">{Math.round(particleConfig.brightness * 100)}%</span>
+                  </label>
+                  <input 
+                    type="range" min="0" max="1" step="0.05"
+                    value={particleConfig.brightness}
+                    onChange={(e) => setParticleConfig({...particleConfig, brightness: parseFloat(e.target.value)})}
+                    className="w-full accent-space-accent touch-pan-x"
+                  />
+                </div>
+
+                <div>
+                  <label className="flex justify-between text-sm mb-1">
+                    <span>Size</span>
+                    <span className="text-space-highlight">{particleConfig.baseSize}x</span>
+                  </label>
+                  <input 
+                    type="range" min="0" max="5" step="0.1"
+                    value={particleConfig.baseSize}
+                    onChange={(e) => setParticleConfig({...particleConfig, baseSize: parseFloat(e.target.value)})}
+                    className="w-full accent-space-accent touch-pan-x"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm mb-1 text-gray-400">Particle Color</label>
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="color" 
+                      value={particleConfig.color}
+                      onChange={(e) => setParticleConfig({...particleConfig, color: e.target.value})}
+                      className="w-8 h-8 rounded border-none cursor-pointer bg-transparent"
+                    />
+                    <span className="text-xs text-gray-500 uppercase">{particleConfig.color}</span>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            <div className="h-px bg-space-700/50" />
+
+            {/* Animation Settings */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Movement</h3>
+              
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                    <label className="block text-xs text-gray-400 mb-1">Rotate Dir</label>
+                    <select 
+                      value={animationConfig.rotationDirection}
+                      onChange={(e) => setAnimationConfig({...animationConfig, rotationDirection: e.target.value as 'cw'|'ccw'})}
+                      className="w-full bg-space-900 border border-space-700 rounded p-2 text-sm text-gray-200"
+                    >
+                      <option value="cw">Clockwise</option>
+                      <option value="ccw">Counter-CW</option>
+                    </select>
+                 </div>
+                 <div>
+                    <label className="block text-xs text-gray-400 mb-1">Rotation Speed</label>
+                    <input 
+                    type="range" min="0" max="5" step="0.1"
+                    value={animationConfig.rotationSpeed}
+                    onChange={(e) => setAnimationConfig({...animationConfig, rotationSpeed: parseFloat(e.target.value)})}
+                    className="w-full accent-space-accent touch-pan-x h-8"
+                  />
+                 </div>
+              </div>
+
+              <div>
+                <label className="flex justify-between text-sm mb-1">
+                  <span>Initial Scale</span>
+                  <span className="text-space-highlight">{animationConfig.initialScale.toFixed(1)}x</span>
+                </label>
+                <input 
+                  type="range" min="0.1" max="3" step="0.1"
+                  value={animationConfig.initialScale}
+                  onChange={(e) => setAnimationConfig({...animationConfig, initialScale: parseFloat(e.target.value)})}
+                  className="w-full accent-space-accent touch-pan-x"
+                />
+              </div>
+
+               <div>
+                <label className="flex justify-between text-sm mb-1">
+                  <span>Final Scale</span>
+                  <span className="text-space-highlight">{animationConfig.finalScale.toFixed(1)}x</span>
+                </label>
+                <input 
+                  type="range" min="0.1" max="3" step="0.1"
+                  value={animationConfig.finalScale}
+                  onChange={(e) => setAnimationConfig({...animationConfig, finalScale: parseFloat(e.target.value)})}
+                  className="w-full accent-space-accent touch-pan-x"
+                />
+              </div>
+
+               <div>
+                <label className="flex justify-between text-sm mb-1">
+                  <span>Duration</span>
+                  <span className="text-space-highlight">{animationConfig.duration}s</span>
+                </label>
+                <input 
+                  type="range" min="1" max="15" step="1"
+                  value={animationConfig.duration}
+                  onChange={(e) => setAnimationConfig({...animationConfig, duration: parseFloat(e.target.value)})}
+                  className="w-full accent-space-accent touch-pan-x"
+                />
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+      </main>
+    </div>
+  );
+};
+
+export default App;
