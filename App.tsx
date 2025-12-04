@@ -36,7 +36,7 @@ const App: React.FC = () => {
   
   // Star Detection State
   const [detectedParticles, setDetectedParticles] = useState<Particle[] | null>(null);
-  const [detectionMode, setDetectionMode] = useState<'real' | 'procedural'>('procedural');
+  const [detectionMode, setDetectionMode] = useState<'real' | 'ai-map' | 'procedural'>('procedural');
 
   // Configuration State
   const [particleConfig, setParticleConfig] = useState<ParticleConfig>({
@@ -90,20 +90,19 @@ const App: React.FC = () => {
       return;
     }
     
-    // Use user input name or identified name or 'Unknown'
     const nameToUse = nebulaData.name || nebulaData.identifiedName || "Unknown Nebula";
     
     setIsAnalyzing(true);
     setAnalysisStatus('none');
     setAnalysisProgress(0);
+    setDetectedParticles(null);
     
     try {
-      // Parallel Execution for Speed
-      setAnalysisStep('Processing Star Map & AI Analysis...');
+      setAnalysisStep('Analyzing Image & Star Map...');
       setAnalysisProgress(20);
 
-      // Launch both AI Analysis and Star Detection efficiently
-      const [analysisResult, stars] = await Promise.all([
+      // Run Image Analysis (SXT) and Gemini AI Analysis in parallel
+      const [analysisResult, imageStars] = await Promise.all([
         analyzeNebulaImage(nebulaData.imageBase64, nameToUse),
         detectStarsFromImage(nebulaData.imageBase64)
       ]);
@@ -111,20 +110,48 @@ const App: React.FC = () => {
       setAnalysisProgress(80);
       setNebulaData(prev => ({ ...prev, analysis: analysisResult }));
       
-      // Fallback Logic: Mismatch check
-      const inputNameNorm = nebulaData.name.toLowerCase().trim();
-      const aiNameNorm = (nebulaData.identifiedName || '').toLowerCase().trim();
+      // --- Prioritization Logic ---
       
-      // Heuristic: If user types a specific name that is VERY different from AI, 
-      // and we have very few stars, we might assume the image is poor quality or mismatched.
-      // However, primarily we rely on star count.
-      if (stars.length > 50) {
-        setDetectedParticles(stars);
+      // 1. Image Detected Stars (SXT)
+      if (imageStars.length > 50) {
+        setDetectedParticles(imageStars);
         setDetectionMode('real');
-      } else {
+        console.log("Using Image Detected Stars");
+      } 
+      // 2. AI Star Map (Fallback if image is too blurry/dark/processed)
+      else if (analysisResult.starHotspots && analysisResult.starHotspots.length > 0) {
+        // AI returns sparse hotspots (5-10 points). We need to generate clusters around them.
+        const aiParticles: Particle[] = [];
+        const CLUSTER_SIZE = 50; // Stars per hotspot
+        
+        analysisResult.starHotspots.forEach(spot => {
+          for(let i=0; i<CLUSTER_SIZE; i++) {
+             // Gaussian distribution around hotspot
+             const offsetX = (Math.random() - 0.5) * 0.15; 
+             const offsetY = (Math.random() - 0.5) * 0.15;
+             const x = (spot.x / 100) + offsetX;
+             const y = (spot.y / 100) + offsetY;
+             
+             if(x >=0 && x<=1 && y>=0 && y<=1) {
+                aiParticles.push({
+                  x, y,
+                  z: Math.pow(Math.random(), 3) * 5.0,
+                  scale: 0.5 + Math.random(),
+                  color: analysisResult.dominantColors?.[0] || '#ffffff'
+                });
+             }
+          }
+        });
+        
+        setDetectedParticles(aiParticles);
+        setDetectionMode('ai-map');
+        console.log("Using AI Map Hotspots");
+      } 
+      // 3. Procedural (Random)
+      else {
         setDetectedParticles(null);
         setDetectionMode('procedural');
-        console.log('Low star count or mismatch detected, using generated field.');
+        console.log("Fallback to Procedural");
       }
 
       setAnalysisStatus('success');
@@ -266,9 +293,9 @@ const App: React.FC = () => {
                   <span>✓</span> Analysis complete!
                 </div>
                 <div className="text-xs text-green-300 opacity-80">
-                  {detectionMode === 'real' 
-                    ? `Mapped ${detectedParticles?.length} real stars.` 
-                    : `Used fallback star field (Mismatch or Low Quality).`}
+                  {detectionMode === 'real' && `Using ${detectedParticles?.length} stars detected from image.`}
+                  {detectionMode === 'ai-map' && `Using AI Star Map data (Fallback).`}
+                  {detectionMode === 'procedural' && `Using random star field (Low signal detected).`}
                 </div>
               </div>
             )}
@@ -427,16 +454,16 @@ const App: React.FC = () => {
                   <AdjustmentsHorizontalIcon className="w-4 h-4" />
                   Particle Effects
                 </h3>
-                {detectionMode === 'real' && (
-                  <span className="text-[10px] bg-indigo-900/50 text-indigo-300 border border-indigo-700 px-2 py-0.5 rounded">
-                    Mapped Mode
+                {detectionMode !== 'procedural' && (
+                  <span className="text-[10px] bg-indigo-900/50 text-indigo-300 border border-indigo-700 px-2 py-0.5 rounded uppercase">
+                    {detectionMode === 'real' ? 'SXT Mapped' : 'AI Mapped'}
                   </span>
                 )}
               </div>
               
               <div className="bg-space-900/50 p-3 rounded-lg border border-space-700/50 space-y-4">
                 
-                <div className={detectionMode === 'real' ? 'opacity-50 pointer-events-none' : ''}>
+                <div className={detectionMode !== 'procedural' ? 'opacity-50 pointer-events-none' : ''}>
                   <label className="flex justify-between text-sm mb-1">
                     <span>Density</span>
                     <span className="text-space-highlight">{particleConfig.density}</span>
@@ -455,14 +482,14 @@ const App: React.FC = () => {
                     <span className="text-space-highlight">{Math.round(particleConfig.brightness * 100)}%</span>
                   </label>
                   <input 
-                    type="range" min="0" max="5" step="0.1"
+                    type="range" min="0" max="3" step="0.1"
                     value={particleConfig.brightness}
                     onChange={(e) => setParticleConfig({...particleConfig, brightness: parseFloat(e.target.value)})}
                     className="w-full accent-space-accent touch-pan-x"
                   />
                   <div className="flex justify-between text-[10px] text-gray-500 mt-1">
                      <span>Off</span>
-                     <span>Extreme (500%)</span>
+                     <span>Overexpose (300%)</span>
                   </div>
                 </div>
 
@@ -485,11 +512,16 @@ const App: React.FC = () => {
                     <span className="text-space-highlight">{particleConfig.feathering.toFixed(1)}x</span>
                   </label>
                   <input 
-                    type="range" min="0" max="3" step="0.1"
+                    type="range" min="-3" max="3" step="0.1"
                     value={particleConfig.feathering}
                     onChange={(e) => setParticleConfig({...particleConfig, feathering: parseFloat(e.target.value)})}
                     className="w-full accent-space-accent touch-pan-x"
                   />
+                   <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                     <span>Sharpen/Contract</span>
+                     <span>Default</span>
+                     <span>Glow/Expand</span>
+                  </div>
                 </div>
 
                 <div>

@@ -222,9 +222,13 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
     ctx.globalCompositeOperation = 'screen'; 
     
-    if (brightness > 0) {
-        ctx.filter = `brightness(${Math.min(brightness * 100, 500)}%)`; 
-    }
+    // Brightness Control: If > 200%, simulate overexposure bloom
+    const isOverexposed = brightness > 2.0;
+    
+    // If not overexposed, just use standard filter. 
+    // If overexposed, we use filter up to 200%, and handle the rest via sprite scaling
+    const filterBrightness = Math.min(brightness, 2.0) * 100;
+    ctx.filter = `brightness(${filterBrightness}%)`;
 
     ctx.globalAlpha = Math.min(1, brightness); 
 
@@ -232,6 +236,16 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     
     // Internal mapping size
     const internalSizeMultiplier = 0.25;
+
+    // Calculate Feathering Scale Logic
+    let featheringMultiplier = 1.0;
+    if (feathering >= 0) {
+      // Positive: Expansion (1.0 to 4.0)
+      featheringMultiplier = 1.0 + feathering;
+    } else {
+      // Negative: Contraction/Sharpening (-3 to 0 -> 0.25 to 1.0)
+      featheringMultiplier = 1.0 / (1.0 + Math.abs(feathering));
+    }
 
     if (baseSize > 0 && brightness > 0) {
       for (let i = 0; i < activeParticles.length; i++) {
@@ -255,7 +269,11 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         const finalY = zOriginY + vecY * parallaxScale;
 
         const depthSizeMultiplier = 1 + (p.z * zoomDelta * 0.5); 
-        const spriteScaleFactor = (1 + feathering); 
+        
+        // Overexposure Simulation: Expand sprite size if brightness > 2
+        const bloomMultiplier = isOverexposed ? (1 + (brightness - 2.0) * 0.5) : 1.0;
+        
+        const spriteScaleFactor = featheringMultiplier * bloomMultiplier; 
         
         const coreSize = (baseSize * internalSizeMultiplier) * p.scale * resolutionScale * depthSizeMultiplier;
         const finalSpriteSize = coreSize * spriteScaleFactor * 8; 

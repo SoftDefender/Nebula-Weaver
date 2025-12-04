@@ -2,8 +2,12 @@
 import { Particle } from '../types';
 
 /**
- * Analyzes an image to find star-like objects using adaptive thresholding
- * and local contrast isolation (similar to Source Extractor/StarNet concepts).
+ * Analyzes an image to find star-like objects using Background Subtraction 
+ * (Conceptually similar to PixInsight SXT / StarNet++).
+ * 
+ * 1. Estimate Background (Nebulosity)
+ * 2. Subtract Background from Original
+ * 3. Threshold the Residuals to find Stars
  */
 export const detectStarsFromImage = (
   imageBase64: string, 
@@ -20,8 +24,7 @@ export const detectStarsFromImage = (
         return;
       }
 
-      // 1. Resize for analysis
-      // A width of ~1024 strikes a good balance between speed and resolving small stars
+      // Resize for analysis (Trade-off: Resolution vs Speed)
       const ANALYSIS_WIDTH = 1024; 
       const scale = Math.min(1, ANALYSIS_WIDTH / img.naturalWidth);
       const width = Math.floor(img.naturalWidth * scale);
@@ -33,106 +36,121 @@ export const detectStarsFromImage = (
       ctx.drawImage(img, 0, 0, width, height);
       const imageData = ctx.getImageData(0, 0, width, height);
       const data = imageData.data;
+      const pixelCount = width * height;
 
-      // 2. Pre-calculate Luminance Map (Float32 for speed)
-      const lumaMap = new Float32Array(width * height);
-      let totalLuma = 0;
-      let totalSqLuma = 0;
-      let sampleCount = 0;
+      // 1. Create Luminance Map
+      const luma = new Float32Array(pixelCount);
+      for (let i = 0; i < pixelCount; i++) {
+        // Perceptual luminance
+        luma[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+      }
 
-      // We sample statistics to determine the "Background" vs "Signal"
-      // Step 4 is a speed optimization for statistics
-      for (let i = 0; i < width * height; i++) {
-        const r = data[i * 4];
-        const g = data[i * 4 + 1];
-        const b = data[i * 4 + 2];
-        // Human perception of luminance
-        const val = 0.299 * r + 0.587 * g + 0.114 * b;
-        lumaMap[i] = val;
+      // 2. Estimate Background (Simplified Morphological Opening)
+      // Real SXT uses complex wavelet transforms. Here we approximate by 
+      // sampling a local window to find the "floor" value (the gas).
+      // Since iterating every pixel with a window is slow, we use a grid approach.
+      
+      const BLOCK_SIZE = 16; // 16x16 blocks
+      const gridW = Math.ceil(width / BLOCK_SIZE);
+      const gridH = Math.ceil(height / BLOCK_SIZE);
+      const bgGrid = new Float32Array(gridW * gridH);
 
-        // Statistics sampling (every 10th pixel)
-        if (i % 10 === 0) {
-           totalLuma += val;
-           totalSqLuma += val * val;
-           sampleCount++;
+      for (let gy = 0; gy < gridH; gy++) {
+        for (let gx = 0; gx < gridW; gx++) {
+          // Find median/min luminance in this block to represent nebulosity
+          let minVal = 255;
+          let sum = 0;
+          let count = 0;
+          
+          const startX = gx * BLOCK_SIZE;
+          const startY = gy * BLOCK_SIZE;
+          const endX = Math.min(startX + BLOCK_SIZE, width);
+          const endY = Math.min(startY + BLOCK_SIZE, height);
+
+          for (let y = startY; y < endY; y += 4) { // stride 4
+            for (let x = startX; x < endX; x += 4) {
+               const val = luma[y * width + x];
+               if (val < minVal) minVal = val;
+               sum += val;
+               count++;
+            }
+          }
+          // The background is usually the dimmer part of the block
+          bgGrid[gy * gridW + gx] = minVal; 
         }
       }
 
-      // 3. Calculate Adaptive Threshold (Sigma Clipping)
-      // This mimics N.I.N.A / AstroBin statistics
-      const mean = totalLuma / sampleCount;
-      const variance = (totalSqLuma / sampleCount) - (mean * mean);
-      const stdDev = Math.sqrt(Math.max(0, variance));
-      
-      // Threshold: Background Mean + (K * Sigma)
-      // Higher K = Fewer stars, less noise. Lower K = More stars, more nebula gas detected.
-      // 2.0 is a balanced start for astrophotos.
-      const THRESHOLD = Math.max(40, mean + (stdDev * 2.5)); 
-
+      // 3. Scan for Stars (Residual = Original - Background)
       const particles: Particle[] = [];
+      const SCAN_STEP = 2; 
       
-      // 4. Scan for Stars
-      // We look for peaks. 
-      // Logic: A star is a pixel that is:
-      // A) Brighter than the Threshold
-      // B) A local Maximum (brighter than immediate neighbors)
-      // C) "Isolated" (Sharp contrast against a slightly wider ring) - The "StarNet" separation logic
+      // Dynamic Thresholding Stats
+      let residualSum = 0;
+      let residualSqSum = 0;
+      let samp = 0;
       
-      const SCAN_STEP = 2; // Check every 2nd pixel for speed
-      const EDGE_MARGIN = 4;
+      // First pass: Calc stats on residuals to find meaningful signal
+      for (let i = 0; i < pixelCount; i += 100) {
+        const x = i % width;
+        const y = Math.floor(i / width);
+        const gx = Math.floor(x / BLOCK_SIZE);
+        const gy = Math.floor(y / BLOCK_SIZE);
+        const bgVal = bgGrid[gy * gridW + gx];
+        
+        const residual = Math.max(0, luma[i] - bgVal);
+        residualSum += residual;
+        residualSqSum += residual * residual;
+        samp++;
+      }
       
-      for (let y = EDGE_MARGIN; y < height - EDGE_MARGIN; y += SCAN_STEP) {
-        for (let x = EDGE_MARGIN; x < width - EDGE_MARGIN; x += SCAN_STEP) {
+      const resMean = residualSum / samp;
+      const resStd = Math.sqrt((residualSqSum / samp) - (resMean * resMean));
+      const THRESHOLD = resMean + (resStd * 3.0); // 3 Sigma above background noise
+
+      // Second Pass: Identification
+      for (let y = 2; y < height - 2; y += SCAN_STEP) {
+        for (let x = 2; x < width - 2; x += SCAN_STEP) {
           const idx = y * width + x;
-          const val = lumaMap[idx];
+          const gx = Math.floor(x / BLOCK_SIZE);
+          const gy = Math.floor(y / BLOCK_SIZE);
+          
+          // Interpolate background for smoother subtraction? 
+          // For speed, block lookups are okay if blocks are small.
+          const bg = bgGrid[gy * gridW + gx];
+          const val = luma[idx];
+          const residual = val - bg;
 
-          if (val < THRESHOLD) continue;
+          if (residual < THRESHOLD) continue;
 
-          // Check Local Max (Immediate 3x3)
+          // Local Maxima Check (on original data is fine since background is smooth)
           if (
-            val <= lumaMap[idx - 1] || val <= lumaMap[idx + 1] ||
-            val <= lumaMap[idx - width] || val <= lumaMap[idx + width]
-          ) {
-            continue;
-          }
+             luma[idx] <= luma[idx - 1] || luma[idx] <= luma[idx + 1] ||
+             luma[idx] <= luma[idx - width] || luma[idx] <= luma[idx + width]
+          ) continue;
 
-          // Isolation Check (The "StarNet" Logic)
-          // We check the average brightness of a ring 3-4 pixels away.
-          // If the ring is also very bright, we are likely in a nebula core, not a star.
-          // Stars have sharp falloff.
-          let ringSum = 0;
-          let ringCount = 0;
-          const radius = 3;
-          
-          // Sample 4 points on the ring (Top, Bottom, Left, Right)
-          ringSum += lumaMap[idx - radius];
-          ringSum += lumaMap[idx + radius];
-          ringSum += lumaMap[idx - (width * radius)];
-          ringSum += lumaMap[idx + (width * radius)];
-          const ringAvg = ringSum / 4;
+          // Extract Color
+          const r = data[idx * 4];
+          const g = data[idx * 4 + 1];
+          const b = data[idx * 4 + 2];
+          const hex = "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 
-          // Contrast Ratio: The peak should be significantly brighter than the ring
-          if (val - ringAvg < stdDev * 0.5) continue; 
-
-          // If we passed, we have a star.
-          
-          // Calculate Z-Depth (Tunnel effect distribution)
-          // More stars in the back (low Z), fewer in the front (high Z)
+          // Z-Depth for 3D effect
           const z = Math.pow(Math.random(), 3) * 5.0;
 
-          // Scale relative to brightness, but clamped
-          const detectedScale = Math.min(2.0, Math.max(0.3, (val - ringAvg) / 50));
+          // Scale based on residual intensity (how much brighter than background)
+          const scaleVal = Math.min(2.0, Math.max(0.2, (residual - THRESHOLD) / 50));
 
           particles.push({
-            x: x / width, 
-            y: y / height, 
-            z: z, 
-            scale: detectedScale
+            x: x / width,
+            y: y / height,
+            z: z,
+            scale: scaleVal,
+            color: hex
           });
         }
       }
 
-      console.log(`Detected ${particles.length} stars (Threshold: ${THRESHOLD.toFixed(1)}) in ${(performance.now() - startTime).toFixed(1)}ms`);
+      console.log(`Detected ${particles.length} stars via SXT logic in ${(performance.now() - startTime).toFixed(1)}ms`);
       resolve(particles);
     };
     img.onerror = () => resolve([]);
