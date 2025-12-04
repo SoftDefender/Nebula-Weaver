@@ -43,12 +43,22 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
   const [activeParticles, setActiveParticles] = useState<Particle[]>([]);
+  const [isMobile, setIsMobile] = useState(false);
 
-  // Improved Star Sprite: Core Highlight + Blur
-  const createStarSprite = (color: string) => {
+  useEffect(() => {
+    setIsMobile(window.innerWidth < 768);
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Improved Star Sprite: Core Highlight + Blur + Feathering Logic
+  const createStarSprite = (color: string, feathering: number) => {
+    const cacheKey = `${color}_${feathering.toFixed(1)}`;
+    
     // Check Cache
-    if (spriteCacheRef.current.has(color)) {
-      return spriteCacheRef.current.get(color)!;
+    if (spriteCacheRef.current.has(cacheKey)) {
+      return spriteCacheRef.current.get(cacheKey)!;
     }
 
     const size = 64; 
@@ -62,37 +72,52 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     const cy = size / 2;
     const radius = size / 2;
 
-    // Apply mild Gaussian blur
-    ctx.filter = 'blur(1px)';
-
     const grad = ctx.createRadialGradient(cx, cy, 1, cx, cy, radius);
     
+    // Gradient Stops Logic
     // Stop 0: Pure HOT White Core
     grad.addColorStop(0.0, '#FFFFFF'); 
-    grad.addColorStop(0.1, '#FFFFFF'); 
+    grad.addColorStop(0.15, '#FFFFFF'); 
     
-    // Stop 0.25: User Color (High Intensity)
-    grad.addColorStop(0.25, color);
+    // Stop 0.3: User Color (High Intensity)
+    grad.addColorStop(0.3, color);
     
-    // Stop 0.6: Fade
-    grad.addColorStop(0.6, color.length === 7 ? `${color}40` : color);
+    // Stop Edge: Fade
+    // If Feathering is negative (sharpening), we pull the transparent stop closer to the core
+    let edgeStop = 1.0;
+    if (feathering < 0) {
+      // Range -3 to 0.
+      // At 0, stop is 1.0 (Standard).
+      // At -3, stop is ~0.35 (Very Sharp, close to the 0.3 color stop).
+      const t = Math.abs(feathering) / 3.0; // 0 to 1
+      edgeStop = 1.0 - (t * 0.65); 
+    }
+
+    // Stop Fade: Mid-way color fade
+    const fadeColor = color.length === 7 ? `${color}40` : color;
+    // We adjust the fade point slightly if sharpening
+    const fadePoint = 0.6 * edgeStop;
+    grad.addColorStop(Math.max(0.31, fadePoint), fadeColor);
     
-    // Stop 1.0: Transparent
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    // Stop 1.0 (or calculated edge): Transparent
+    grad.addColorStop(edgeStop, 'rgba(0,0,0,0)');
 
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, size, size);
     
-    spriteCacheRef.current.set(color, canvas);
+    spriteCacheRef.current.set(cacheKey, canvas);
     return canvas;
   };
 
   useEffect(() => {
-    // Clear cache when base particle config changes if needed, 
-    // but usually color is the main key.
-    // If user changes the global color picker, we update the "default" sprite ref
-    starSpriteRef.current = createStarSprite(particleConfig.color);
-  }, [particleConfig.color]);
+    // Clean cache if it gets too large (memory protection)
+    if (spriteCacheRef.current.size > 200) {
+      spriteCacheRef.current.clear();
+    }
+    // Update default sprite
+    starSpriteRef.current = createStarSprite(particleConfig.color, particleConfig.feathering);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [particleConfig.color, particleConfig.feathering]);
 
   useEffect(() => {
     if (imageBase64) {
@@ -100,13 +125,13 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       img.src = imageBase64;
       img.onload = () => {
         imageRef.current = img;
-        updateCanvasSize(img, videoConfig.resolution);
+        updateCanvasSize(img, videoConfig.resolution, isRecording);
       };
     } else {
       imageRef.current = null;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageBase64]);
+  }, [imageBase64, isMobile]); 
 
   useEffect(() => {
     setPlaybackProgress(0);
@@ -114,25 +139,42 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     lastTimeRef.current = 0;
   }, [triggerPreview, isRecording]);
 
-  // CRITICAL: only resize if resolution changes. 
-  // Bitrate and Format changes are ignored here to prevent preview reload.
   useEffect(() => {
     if (imageRef.current) {
-      updateCanvasSize(imageRef.current, videoConfig.resolution);
+      updateCanvasSize(imageRef.current, videoConfig.resolution, isRecording);
     }
-  }, [videoConfig.resolution]);
+  }, [videoConfig.resolution, isRecording, isMobile]);
 
-  const updateCanvasSize = (img: HTMLImageElement, resolution: string) => {
+  const updateCanvasSize = (img: HTMLImageElement, resolution: string, recording: boolean) => {
     const aspect = img.naturalWidth / img.naturalHeight;
     let w = img.naturalWidth;
     let h = img.naturalHeight;
 
-    if (resolution === '1080p') {
-      if (w > h) { w = 1920; h = 1920 / aspect; } 
-      else { h = 1080; w = 1080 * aspect; }
-    } else if (resolution === '4k') {
-      if (w > h) { w = 3840; h = 3840 / aspect; }
-      else { h = 2160; w = 2160 * aspect; }
+    // If RECORDING, honor the requested resolution strictly
+    if (recording) {
+      if (resolution === '1080p') {
+        if (w > h) { w = 1920; h = 1920 / aspect; } 
+        else { h = 1080; w = 1080 * aspect; }
+      } else if (resolution === '4k') {
+        if (w > h) { w = 3840; h = 3840 / aspect; }
+        else { h = 2160; w = 2160 * aspect; }
+      }
+    } else {
+      // PREVIEW MODE OPTIMIZATION
+      const MOBILE_MAX_WIDTH = 1080;
+      
+      if (isMobile && w > MOBILE_MAX_WIDTH) {
+         w = MOBILE_MAX_WIDTH;
+         h = MOBILE_MAX_WIDTH / aspect;
+      } else {
+         if (resolution === '1080p') {
+            if (w > h) { w = 1920; h = 1920 / aspect; } 
+            else { h = 1080; w = 1080 * aspect; }
+         } else if (resolution === '4k') {
+            if (w > h) { w = 3840; h = 3840 / aspect; }
+            else { h = 2160; w = 2160 * aspect; }
+         }
+      }
     }
 
     w = Math.floor(w / 2) * 2;
@@ -142,13 +184,13 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   };
 
   useEffect(() => {
-    const MAX_PARTICLES = 3000;
+    const MAX_PARTICLES = isMobile ? 1500 : 3500;
 
     if (detectedParticles && detectedParticles.length > 0) {
       let particlesToUse = detectedParticles;
       if (detectedParticles.length > MAX_PARTICLES) {
         particlesToUse = [...detectedParticles]
-          .sort((a, b) => b.scale - a.scale)
+          .sort((a, b) => b.scale - a.scale) 
           .slice(0, MAX_PARTICLES);
       }
       setActiveParticles(particlesToUse);
@@ -169,7 +211,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       };
       setActiveParticles(generateParticles(particleConfig.density));
     }
-  }, [detectedParticles, particleConfig.density]);
+  }, [detectedParticles, particleConfig.density, isMobile]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!onSetZoomOrigin || !canvasRef.current) return;
@@ -181,7 +223,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
   const drawFrame = useCallback((progress: number) => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
+    const ctx = canvas?.getContext('2d', { alpha: false }); 
     if (!canvas || !ctx || !imageRef.current) return;
 
     const cW = canvas.width;
@@ -191,7 +233,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
     const elapsedSeconds = progress * animationConfig.duration;
 
-    ctx.clearRect(0, 0, cW, cH);
+    // Clear and Fill Black
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, cW, cH);
 
@@ -206,80 +248,85 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     ctx.rotate(rotation);
     ctx.translate(-cW / 2, -cH / 2);
     
-    // 1. Draw Background
+    // --- 1. Draw Background ---
     ctx.save(); 
     ctx.translate(zOriginX, zOriginY);
     ctx.scale(currentScale, currentScale);
     ctx.translate(-zOriginX, -zOriginY);
+
+    // FIX: Background is drawn at full opacity, INDEPENDENT of star brightness
+    ctx.globalAlpha = 1.0;
     ctx.drawImage(imageRef.current, 0, 0, cW, cH);
+    
     ctx.restore(); 
 
-    // 2. Draw Particles
-    const { baseSize, brightness, feathering } = particleConfig;
+    // --- 2. Draw Particles ---
+    const { baseSize, feathering, brightness } = particleConfig;
     const canvasDiagonal = Math.sqrt(cW * cW + cH * cH);
     const refDiagonal = Math.sqrt(800 * 600);
     const resolutionScale = canvasDiagonal / refDiagonal;
 
     ctx.globalCompositeOperation = 'screen'; 
     
-    // Brightness Control: If > 200%, simulate overexposure bloom
-    const isOverexposed = brightness > 2.0;
-    
-    // If not overexposed, just use standard filter. 
-    // If overexposed, we use filter up to 200%, and handle the rest via sprite scaling
-    const filterBrightness = Math.min(brightness, 2.0) * 100;
-    ctx.filter = `brightness(${filterBrightness}%)`;
-
+    // Brightness for stars handled via alpha
     ctx.globalAlpha = Math.min(1, brightness); 
 
     const zoomDelta = currentScale - animationConfig.initialScale;
-    
-    // Internal mapping size
     const internalSizeMultiplier = 0.25;
 
     // Calculate Feathering Scale Logic
-    let featheringMultiplier = 1.0;
+    let spriteScaleMultiplier = 1.0;
     if (feathering >= 0) {
-      // Positive: Expansion (1.0 to 4.0)
-      featheringMultiplier = 1.0 + feathering;
+      // Positive: Expansion (Glow)
+      spriteScaleMultiplier = 1.0 + feathering;
     } else {
-      // Negative: Contraction/Sharpening (-3 to 0 -> 0.25 to 1.0)
-      featheringMultiplier = 1.0 / (1.0 + Math.abs(feathering));
+      // Negative: Contraction/Sharpening
+      // We do NOT shrink the sprite scale (which would shrink the core).
+      // We rely on the sprite gradient tightening (handled in createStarSprite) to create the sharpening effect.
+      spriteScaleMultiplier = 1.0;
     }
 
+    // Additional star bloom if brightness is very high
+    const brightnessBloom = brightness > 1.5 ? (1 + (brightness - 1.5) * 0.5) : 1.0;
+
     if (baseSize > 0 && brightness > 0) {
-      for (let i = 0; i < activeParticles.length; i++) {
+      const pLen = activeParticles.length;
+      for (let i = 0; i < pLen; i++) {
         const p = activeParticles[i];
 
         // Determine sprite to use
         let sprite = starSpriteRef.current;
         if (p.color) {
-           sprite = createStarSprite(p.color);
+           sprite = createStarSprite(p.color, feathering);
+        } else {
+           // If using default, make sure it matches current feathering
+           sprite = createStarSprite(particleConfig.color, feathering);
         }
         if (!sprite) continue;
 
         const pX = p.x * cW;
         const pY = p.y * cH;
+        
+        // Parallax Math
         const vecX = pX - zOriginX;
         const vecY = pY - zOriginY;
-
         const parallaxScale = currentScale + (zoomDelta * p.z * 2.0);
-        
         const finalX = zOriginX + vecX * parallaxScale;
         const finalY = zOriginY + vecY * parallaxScale;
+        
+        // Culling
+        const margin = 100 * resolutionScale;
+        if (finalX < -margin || finalX > cW + margin || 
+            finalY < -margin || finalY > cH + margin) continue;
 
         const depthSizeMultiplier = 1 + (p.z * zoomDelta * 0.5); 
         
-        // Overexposure Simulation: Expand sprite size if brightness > 2
-        const bloomMultiplier = isOverexposed ? (1 + (brightness - 2.0) * 0.5) : 1.0;
-        
-        const spriteScaleFactor = featheringMultiplier * bloomMultiplier; 
+        const spriteScaleFactor = spriteScaleMultiplier * brightnessBloom; 
         
         const coreSize = (baseSize * internalSizeMultiplier) * p.scale * resolutionScale * depthSizeMultiplier;
         const finalSpriteSize = coreSize * spriteScaleFactor * 8; 
-
-        if (finalX < -finalSpriteSize || finalX > cW + finalSpriteSize || 
-            finalY < -finalSpriteSize || finalY > cH + finalSpriteSize) continue;
+        
+        if (finalSpriteSize < 0.5) continue;
 
         ctx.drawImage(
           sprite,
@@ -314,15 +361,17 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     const dt = (time - lastTimeRef.current) / 1000;
     lastTimeRef.current = time;
 
+    const safeDt = Math.min(dt, 0.1);
+
     if (isPlaying && !isRecording) {
       setPlaybackProgress(prev => {
-        let next = prev + (dt / animationConfig.duration);
+        let next = prev + (safeDt / animationConfig.duration);
         if (next >= 1) next = 0; 
         return next;
       });
     } else if (isRecording) {
        setPlaybackProgress(prev => {
-        const next = prev + (dt / animationConfig.duration);
+        const next = prev + (safeDt / animationConfig.duration);
         if (next >= 1) return 1; 
         return next;
       });
@@ -343,6 +392,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     };
   }, [animate]);
 
+  // Video Recording Logic
   useEffect(() => {
     if (isRecording) {
       setPlaybackProgress(0);
@@ -354,18 +404,14 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
       const stream = canvas.captureStream(30);
       
-      // Determine optimal MIME type based on export format
       let mimeType = 'video/webm;codecs=vp9';
       const requestedFormat = videoConfig.format;
 
       if (requestedFormat === 'mp4' || requestedFormat === 'mov') {
          if (MediaRecorder.isTypeSupported('video/mp4')) {
-             mimeType = 'video/mp4'; // Chrome/Edge/Safari support
+             mimeType = 'video/mp4'; 
          } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
              mimeType = 'video/mp4;codecs=h264,aac';
-         } else {
-             console.warn('MP4 native recording not supported, falling back to WebM container (will be saved with .mp4 extension)');
-             // Fallback to default
          }
       } else if (requestedFormat === 'mkv') {
          if (MediaRecorder.isTypeSupported('video/x-matroska')) {
@@ -383,7 +429,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         recorder = new MediaRecorder(stream, options);
       } catch (e) {
         console.warn('Failed to create recorder with options', options, e);
-        // Absolute fallback
         recorder = new MediaRecorder(stream);
       }
       
@@ -395,7 +440,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       };
 
       recorder.onstop = () => {
-        // Blob Type should generally match what we asked for, or default
         const blobType = mediaRecorderRef.current?.mimeType || 'video/webm';
         const blob = new Blob(chunksRef.current, { type: blobType });
         const url = URL.createObjectURL(blob);
@@ -408,7 +452,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       const durationMs = animationConfig.duration * 1000;
       const timeout = setTimeout(() => {
         if (recorder.state === 'recording') recorder.stop();
-      }, durationMs + 200); 
+      }, durationMs + 500); 
 
       return () => {
         clearTimeout(timeout);
@@ -458,7 +502,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
                 value={playbackProgress}
                 onChange={handleSeek}
                 onClick={(e) => e.stopPropagation()} 
-                className="w-full accent-space-accent h-1 bg-white/20 rounded-lg appearance-none cursor-pointer"
+                className="w-full accent-space-accent h-1 bg-white/20 rounded-lg appearance-none cursor-pointer touch-none"
               />
                <div className="flex justify-between text-[10px] text-gray-300 mt-1 font-mono">
                   <span>{(playbackProgress * animationConfig.duration).toFixed(1)}s</span>

@@ -438,7 +438,7 @@ const App: React.FC = () => {
                     type="range" min="1" max="50" step="1"
                     value={videoConfig.bitrate}
                     onChange={(e) => setVideoConfig({...videoConfig, bitrate: parseFloat(e.target.value)})}
-                    className="w-full accent-space-accent touch-pan-x"
+                    className="w-full accent-space-accent touch-none"
                   />
                   <p className="text-[10px] text-gray-500 mt-1">Bitrate applies to export only</p>
                 </div>
@@ -472,7 +472,7 @@ const App: React.FC = () => {
                     type="range" min="0" max="500" step="10"
                     value={particleConfig.density}
                     onChange={(e) => setParticleConfig({...particleConfig, density: parseFloat(e.target.value)})}
-                    className="w-full accent-space-accent touch-pan-x"
+                    className="w-full accent-space-accent touch-none"
                   />
                 </div>
 
@@ -485,7 +485,7 @@ const App: React.FC = () => {
                     type="range" min="0" max="3" step="0.1"
                     value={particleConfig.brightness}
                     onChange={(e) => setParticleConfig({...particleConfig, brightness: parseFloat(e.target.value)})}
-                    className="w-full accent-space-accent touch-pan-x"
+                    className="w-full accent-space-accent touch-none"
                   />
                   <div className="flex justify-between text-[10px] text-gray-500 mt-1">
                      <span>Off</span>
@@ -502,7 +502,7 @@ const App: React.FC = () => {
                     type="range" min="0" max="2" step="0.01"
                     value={particleConfig.baseSize}
                     onChange={(e) => setParticleConfig({...particleConfig, baseSize: parseFloat(e.target.value)})}
-                    className="w-full accent-space-accent touch-pan-x"
+                    className="w-full accent-space-accent touch-none"
                   />
                 </div>
                 
@@ -515,7 +515,7 @@ const App: React.FC = () => {
                     type="range" min="-3" max="3" step="0.1"
                     value={particleConfig.feathering}
                     onChange={(e) => setParticleConfig({...particleConfig, feathering: parseFloat(e.target.value)})}
-                    className="w-full accent-space-accent touch-pan-x"
+                    className="w-full accent-space-accent touch-none"
                   />
                    <div className="flex justify-between text-[10px] text-gray-500 mt-1">
                      <span>Sharpen/Contract</span>
@@ -564,7 +564,7 @@ const App: React.FC = () => {
                     type="range" min="0" max="5" step="0.1"
                     value={animationConfig.rotationSpeed}
                     onChange={(e) => setAnimationConfig({...animationConfig, rotationSpeed: parseFloat(e.target.value)})}
-                    className="w-full accent-space-accent touch-pan-x h-8"
+                    className="w-full accent-space-accent touch-none h-8"
                   />
                  </div>
               </div>
@@ -578,7 +578,7 @@ const App: React.FC = () => {
                   type="range" min="0.1" max="3" step="0.1"
                   value={animationConfig.initialScale}
                   onChange={(e) => setAnimationConfig({...animationConfig, initialScale: parseFloat(e.target.value)})}
-                  className="w-full accent-space-accent touch-pan-x"
+                  className="w-full accent-space-accent touch-none"
                 />
               </div>
 
@@ -591,7 +591,7 @@ const App: React.FC = () => {
                   type="range" min="0.1" max="3" step="0.1"
                   value={animationConfig.finalScale}
                   onChange={(e) => setAnimationConfig({...animationConfig, finalScale: parseFloat(e.target.value)})}
-                  className="w-full accent-space-accent touch-pan-x"
+                  className="w-full accent-space-accent touch-none"
                 />
               </div>
 
@@ -604,7 +604,7 @@ const App: React.FC = () => {
                   type="range" min="1" max="15" step="1"
                   value={animationConfig.duration}
                   onChange={(e) => setAnimationConfig({...animationConfig, duration: parseFloat(e.target.value)})}
-                  className="w-full accent-space-accent touch-pan-x"
+                  className="w-full accent-space-accent touch-none"
                 />
               </div>
             </div>
