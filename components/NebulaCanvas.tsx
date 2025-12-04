@@ -36,7 +36,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   const imageRef = useRef<HTMLImageElement | null>(null);
   
   const starSpriteRef = useRef<HTMLCanvasElement | null>(null);
-  
+  const spriteCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+
   const [isPlaying, setIsPlaying] = useState(true);
   const [playbackProgress, setPlaybackProgress] = useState(0); 
   
@@ -45,6 +46,11 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
   // Improved Star Sprite: Core Highlight + Blur
   const createStarSprite = (color: string) => {
+    // Check Cache
+    if (spriteCacheRef.current.has(color)) {
+      return spriteCacheRef.current.get(color)!;
+    }
+
     const size = 64; 
     const canvas = document.createElement('canvas');
     canvas.width = size;
@@ -56,12 +62,12 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     const cy = size / 2;
     const radius = size / 2;
 
-    // Apply mild Gaussian blur to the whole sprite generation for soft glow
+    // Apply mild Gaussian blur
     ctx.filter = 'blur(1px)';
 
     const grad = ctx.createRadialGradient(cx, cy, 1, cx, cy, radius);
     
-    // Stop 0: Pure HOT White Core (Enhanced)
+    // Stop 0: Pure HOT White Core
     grad.addColorStop(0.0, '#FFFFFF'); 
     grad.addColorStop(0.1, '#FFFFFF'); 
     
@@ -76,10 +82,15 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, size, size);
+    
+    spriteCacheRef.current.set(color, canvas);
     return canvas;
   };
 
   useEffect(() => {
+    // Clear cache when base particle config changes if needed, 
+    // but usually color is the main key.
+    // If user changes the global color picker, we update the "default" sprite ref
     starSpriteRef.current = createStarSprite(particleConfig.color);
   }, [particleConfig.color]);
 
@@ -103,6 +114,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     lastTimeRef.current = 0;
   }, [triggerPreview, isRecording]);
 
+  // CRITICAL: only resize if resolution changes. 
+  // Bitrate and Format changes are ignored here to prevent preview reload.
   useEffect(() => {
     if (imageRef.current) {
       updateCanvasSize(imageRef.current, videoConfig.resolution);
@@ -129,12 +142,21 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   };
 
   useEffect(() => {
+    const MAX_PARTICLES = 3000;
+
     if (detectedParticles && detectedParticles.length > 0) {
-      setActiveParticles(detectedParticles);
+      let particlesToUse = detectedParticles;
+      if (detectedParticles.length > MAX_PARTICLES) {
+        particlesToUse = [...detectedParticles]
+          .sort((a, b) => b.scale - a.scale)
+          .slice(0, MAX_PARTICLES);
+      }
+      setActiveParticles(particlesToUse);
     } else {
       const generateParticles = (count: number) => {
         const particles: Particle[] = [];
-        for (let i = 0; i < count; i++) {
+        const safeCount = Math.min(count, MAX_PARTICLES);
+        for (let i = 0; i < safeCount; i++) {
           const z = Math.pow(Math.random(), 3) * 5.0; 
           particles.push({
             x: Math.random(),
@@ -149,7 +171,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     }
   }, [detectedParticles, particleConfig.density]);
 
-  // Click to set Zoom Origin
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!onSetZoomOrigin || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
@@ -165,7 +186,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
     const cW = canvas.width;
     const cH = canvas.height;
-    // Current Zoom Center (Defaults to 0.5, 0.5)
     const zOriginX = animationConfig.zoomOrigin.x * cW;
     const zOriginY = animationConfig.zoomOrigin.y * cH;
 
@@ -182,14 +202,11 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
     ctx.save();
     
-    // Global Rotate around center of screen (optional: could rotate around zoom origin too, but screen center feels more like camera roll)
     ctx.translate(cW / 2, cH / 2);
     ctx.rotate(rotation);
     ctx.translate(-cW / 2, -cH / 2);
     
     // 1. Draw Background
-    // We want to scale "Towards" the zoom origin.
-    // Logic: Translate Origin to 0,0 -> Scale -> Translate back
     ctx.save(); 
     ctx.translate(zOriginX, zOriginY);
     ctx.scale(currentScale, currentScale);
@@ -197,7 +214,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     ctx.drawImage(imageRef.current, 0, 0, cW, cH);
     ctx.restore(); 
 
-    // 2. Draw Particles (3D Parallax relative to Zoom Origin)
+    // 2. Draw Particles
     const { baseSize, brightness, feathering } = particleConfig;
     const canvasDiagonal = Math.sqrt(cW * cW + cH * cH);
     const refDiagonal = Math.sqrt(800 * 600);
@@ -205,43 +222,43 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
     ctx.globalCompositeOperation = 'screen'; 
     
-    // Apply brightness filter to allow > 100% brightness (over-exposure)
-    // If brightness is 2.0, this boosts the image values
     if (brightness > 0) {
-        ctx.filter = `brightness(${Math.min(brightness * 100, 300)}%)`; 
+        ctx.filter = `brightness(${Math.min(brightness * 100, 500)}%)`; 
     }
 
-    // Since we used filter for intensity, we use globalAlpha for fading if < 1
     ctx.globalAlpha = Math.min(1, brightness); 
 
     const zoomDelta = currentScale - animationConfig.initialScale;
-    const sprite = starSpriteRef.current;
+    
+    // Internal mapping size
+    const internalSizeMultiplier = 0.25;
 
-    if (baseSize > 0 && brightness > 0 && sprite) {
+    if (baseSize > 0 && brightness > 0) {
       for (let i = 0; i < activeParticles.length; i++) {
         const p = activeParticles[i];
 
-        // Particle actual position in px
+        // Determine sprite to use
+        let sprite = starSpriteRef.current;
+        if (p.color) {
+           sprite = createStarSprite(p.color);
+        }
+        if (!sprite) continue;
+
         const pX = p.x * cW;
         const pY = p.y * cH;
-
-        // Vector from Zoom Origin to Particle
         const vecX = pX - zOriginX;
         const vecY = pY - zOriginY;
 
-        // Parallax Logic:
-        // Stars closer (High Z) move away from origin faster
         const parallaxScale = currentScale + (zoomDelta * p.z * 2.0);
         
-        // Final screen position relative to origin
         const finalX = zOriginX + vecX * parallaxScale;
         const finalY = zOriginY + vecY * parallaxScale;
 
         const depthSizeMultiplier = 1 + (p.z * zoomDelta * 0.5); 
         const spriteScaleFactor = (1 + feathering); 
         
-        const coreSize = baseSize * p.scale * resolutionScale * depthSizeMultiplier;
-        const finalSpriteSize = coreSize * spriteScaleFactor * 8; // Increased sprite usage for better glow
+        const coreSize = (baseSize * internalSizeMultiplier) * p.scale * resolutionScale * depthSizeMultiplier;
+        const finalSpriteSize = coreSize * spriteScaleFactor * 8; 
 
         if (finalX < -finalSpriteSize || finalX > cW + finalSpriteSize || 
             finalY < -finalSpriteSize || finalY > cH + finalSpriteSize) continue;
@@ -258,10 +275,9 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     
     ctx.restore();
 
-    // Draw Crosshair for Zoom Origin (Only in UI, not in recording preferably, but useful for preview)
     if (!isRecording && imageBase64) {
       ctx.save();
-      ctx.strokeStyle = 'rgba(99, 102, 241, 0.5)'; // Indigo
+      ctx.strokeStyle = 'rgba(99, 102, 241, 0.5)';
       ctx.lineWidth = 2;
       ctx.beginPath();
       const chSize = 10;
@@ -319,8 +335,28 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       if (!canvas) return;
 
       const stream = canvas.captureStream(30);
+      
+      // Determine optimal MIME type based on export format
+      let mimeType = 'video/webm;codecs=vp9';
+      const requestedFormat = videoConfig.format;
+
+      if (requestedFormat === 'mp4' || requestedFormat === 'mov') {
+         if (MediaRecorder.isTypeSupported('video/mp4')) {
+             mimeType = 'video/mp4'; // Chrome/Edge/Safari support
+         } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
+             mimeType = 'video/mp4;codecs=h264,aac';
+         } else {
+             console.warn('MP4 native recording not supported, falling back to WebM container (will be saved with .mp4 extension)');
+             // Fallback to default
+         }
+      } else if (requestedFormat === 'mkv') {
+         if (MediaRecorder.isTypeSupported('video/x-matroska')) {
+             mimeType = 'video/x-matroska';
+         }
+      }
+
       const options: MediaRecorderOptions = {
-        mimeType: 'video/webm;codecs=vp9',
+        mimeType: mimeType,
         bitsPerSecond: videoConfig.bitrate * 1000000 
       };
 
@@ -328,6 +364,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       try {
         recorder = new MediaRecorder(stream, options);
       } catch (e) {
+        console.warn('Failed to create recorder with options', options, e);
+        // Absolute fallback
         recorder = new MediaRecorder(stream);
       }
       
@@ -339,7 +377,9 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       };
 
       recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+        // Blob Type should generally match what we asked for, or default
+        const blobType = mediaRecorderRef.current?.mimeType || 'video/webm';
+        const blob = new Blob(chunksRef.current, { type: blobType });
         const url = URL.createObjectURL(blob);
         onRecordingComplete(url);
         setIsPlaying(false);
@@ -357,7 +397,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         if (recorder.state === 'recording') recorder.stop();
       };
     }
-  }, [isRecording, animationConfig.duration, videoConfig.bitrate, onRecordingComplete]);
+  }, [isRecording, animationConfig.duration, videoConfig.bitrate, videoConfig.format, onRecordingComplete]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);

@@ -1,9 +1,11 @@
 
 export type Resolution = '1080p' | '4k' | 'original';
+export type ExportFormat = 'webm' | 'mp4' | 'mkv' | 'mov';
 
 export interface VideoConfig {
   resolution: Resolution;
   bitrate: number; // Mbps
+  format: ExportFormat;
 }
 
 export interface ParticleConfig {
@@ -41,4 +43,5 @@ export interface Particle {
   y: number; // Normalized 0-1
   z: number; // Depth factor (parallax)
   scale: number; // Size variation factor
+  color?: string; // Specific star color if detected
 }

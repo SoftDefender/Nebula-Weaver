@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback } from 'react';
-import { ParticleConfig, AnimationConfig, NebulaData, VideoConfig, Particle } from './types';
+import { ParticleConfig, AnimationConfig, NebulaData, VideoConfig, Particle, ExportFormat } from './types';
 import NebulaCanvas from './components/NebulaCanvas';
 import { analyzeNebulaImage, identifyNebulaFromImage } from './services/geminiService';
 import { detectStarsFromImage } from './services/starDetectionService';
@@ -59,6 +59,7 @@ const App: React.FC = () => {
   const [videoConfig, setVideoConfig] = useState<VideoConfig>({
     resolution: '1080p',
     bitrate: 5, 
+    format: 'mp4'
   });
 
   // Handlers
@@ -111,8 +112,12 @@ const App: React.FC = () => {
       setNebulaData(prev => ({ ...prev, analysis: analysisResult }));
       
       // Fallback Logic: Mismatch check
-      // If the image is detected as having very few stars, but user wants stars,
-      // we assume the detection failed (mismatch) and use procedural.
+      const inputNameNorm = nebulaData.name.toLowerCase().trim();
+      const aiNameNorm = (nebulaData.identifiedName || '').toLowerCase().trim();
+      
+      // Heuristic: If user types a specific name that is VERY different from AI, 
+      // and we have very few stars, we might assume the image is poor quality or mismatched.
+      // However, primarily we rely on star count.
       if (stars.length > 50) {
         setDetectedParticles(stars);
         setDetectionMode('real');
@@ -131,6 +136,12 @@ const App: React.FC = () => {
     } finally {
       setIsAnalyzing(false);
       setAnalysisStep('');
+    }
+  };
+
+  const handleApplyAiName = () => {
+    if (nebulaData.identifiedName) {
+      setNebulaData(prev => ({ ...prev, name: nebulaData.identifiedName! }));
     }
   };
 
@@ -194,16 +205,20 @@ const App: React.FC = () => {
                   placeholder={isIdentifying ? "Identifying..." : (nebulaData.identifiedName || "e.g. Orion Nebula")}
                   className="w-full bg-space-900 border border-space-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-space-accent placeholder-gray-600"
                 />
-                {nebulaData.identifiedName && !nebulaData.name && (
-                   <div className="absolute right-2 top-2 text-xs text-space-accent animate-pulse">
-                      AI Detected
-                   </div>
-                )}
               </div>
+              
               {nebulaData.identifiedName && (
-                <p className="text-[10px] text-gray-400 mt-1 pl-1">
-                   AI suggests: <span className="text-space-highlight font-mono">{nebulaData.identifiedName}</span>
-                </p>
+                <div className="flex items-center justify-between mt-2 bg-space-900/50 p-2 rounded border border-space-700/50">
+                   <p className="text-[10px] text-gray-400">
+                      AI Suggests: <span className="text-space-highlight font-mono">{nebulaData.identifiedName}</span>
+                   </p>
+                   <button 
+                     onClick={handleApplyAiName}
+                     className="text-[10px] bg-space-700 hover:bg-space-600 px-2 py-1 rounded text-white transition-colors"
+                   >
+                     Apply
+                   </button>
+                </div>
               )}
             </div>
 
@@ -291,7 +306,7 @@ const App: React.FC = () => {
                 <div className="absolute inset-0 z-50 bg-black/80 flex flex-col items-center justify-center backdrop-blur-sm rounded-lg">
                    <div className="w-16 h-16 border-4 border-space-700 border-t-space-accent rounded-full animate-spin mb-4" />
                    <h3 className="text-xl font-bold text-white">Rendering Video...</h3>
-                   <p className="text-gray-400">Resolution: {videoConfig.resolution} • Bitrate: {videoConfig.bitrate}Mbps</p>
+                   <p className="text-gray-400">Resolution: {videoConfig.resolution} • {videoConfig.format.toUpperCase()}</p>
                 </div>
              )}
           </div>
@@ -307,7 +322,7 @@ const App: React.FC = () => {
                 }`}
              >
                 <FilmIcon className="w-5 h-5 md:w-6 md:h-6" />
-                {isGenerating ? 'Processing...' : 'Generate Video'}
+                {isGenerating ? 'Processing...' : `Export ${videoConfig.format.toUpperCase()}`}
              </button>
           </div>
 
@@ -324,10 +339,10 @@ const App: React.FC = () => {
                     </p>
                     <a 
                       href={videoUrl} 
-                      download={`${nebulaData.name || 'nebula'}-animation.webm`}
+                      download={`${nebulaData.name || 'nebula'}-animation.${videoConfig.format}`}
                       className="block w-full text-center py-2 bg-space-700 hover:bg-space-600 text-white rounded-lg border border-space-600 transition-colors"
                     >
-                      Download Video (.webm)
+                      Download Video (.{videoConfig.format})
                     </a>
                     <button 
                        onClick={() => setVideoUrl(null)}
@@ -359,7 +374,7 @@ const App: React.FC = () => {
               
               <div className="bg-space-900/50 p-3 rounded-lg border border-space-700/50 space-y-4">
                 <div>
-                   <label className="block text-xs text-gray-400 mb-1">Resolution (Maintains Aspect Ratio)</label>
+                   <label className="block text-xs text-gray-400 mb-1">Resolution</label>
                    <select 
                       value={videoConfig.resolution}
                       onChange={(e) => setVideoConfig({...videoConfig, resolution: e.target.value as any})}
@@ -371,17 +386,34 @@ const App: React.FC = () => {
                    </select>
                 </div>
 
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Format</label>
+                     <select 
+                        value={videoConfig.format}
+                        onChange={(e) => setVideoConfig({...videoConfig, format: e.target.value as ExportFormat})}
+                        className="w-full bg-space-900 border border-space-700 rounded p-2 text-sm text-gray-200"
+                     >
+                        <option value="mp4">MP4</option>
+                        <option value="webm">WebM</option>
+                        <option value="mkv">MKV</option>
+                        <option value="mov">MOV</option>
+                     </select>
+                  </div>
+                   <div>
+                    <label className="block text-xs text-gray-400 mb-1">Bitrate</label>
+                     <div className="text-xs text-space-highlight mb-1 text-right">{videoConfig.bitrate} Mbps</div>
+                  </div>
+                </div>
+
                 <div>
-                  <label className="flex justify-between text-sm mb-1">
-                    <span>Bitrate</span>
-                    <span className="text-space-highlight">{videoConfig.bitrate} Mbps</span>
-                  </label>
                   <input 
                     type="range" min="1" max="50" step="1"
                     value={videoConfig.bitrate}
                     onChange={(e) => setVideoConfig({...videoConfig, bitrate: parseFloat(e.target.value)})}
                     className="w-full accent-space-accent touch-pan-x"
                   />
+                  <p className="text-[10px] text-gray-500 mt-1">Bitrate applies to export only</p>
                 </div>
               </div>
             </div>
@@ -423,14 +455,14 @@ const App: React.FC = () => {
                     <span className="text-space-highlight">{Math.round(particleConfig.brightness * 100)}%</span>
                   </label>
                   <input 
-                    type="range" min="0" max="3" step="0.05"
+                    type="range" min="0" max="5" step="0.1"
                     value={particleConfig.brightness}
                     onChange={(e) => setParticleConfig({...particleConfig, brightness: parseFloat(e.target.value)})}
                     className="w-full accent-space-accent touch-pan-x"
                   />
                   <div className="flex justify-between text-[10px] text-gray-500 mt-1">
                      <span>Off</span>
-                     <span>Max Overdrive</span>
+                     <span>Extreme (500%)</span>
                   </div>
                 </div>
 
