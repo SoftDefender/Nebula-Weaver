@@ -1,7 +1,28 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { NebulaAnalysis } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// Fast identification step - runs immediately on upload
+export const identifyNebulaFromImage = async (imageBase64: string): Promise<string> => {
+  try {
+    const base64Data = imageBase64.split(',')[1] || imageBase64;
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash", // Use flash for speed
+      contents: {
+        parts: [
+          { inlineData: { mimeType: "image/jpeg", data: base64Data } },
+          { text: "Identify the common name of this nebula. Return ONLY the name. If unknown, return 'Unknown Nebula'." },
+        ],
+      },
+    });
+    return response.text?.trim() || "Unknown Nebula";
+  } catch (e) {
+    console.error("Identity failed", e);
+    return "Unknown Nebula";
+  }
+};
 
 export const analyzeNebulaImage = async (
   imageBase64: string,
@@ -10,27 +31,18 @@ export const analyzeNebulaImage = async (
   try {
     const prompt = `
       Analyze this image of the nebula named "${nebulaName}".
-      I need data to generate a particle animation overlay.
-      
-      1. Provide a short, poetic description (max 20 words).
-      2. Identify up to 3 dominant hex colors suitable for star particles.
-      3. Identify roughly 10-20 "hotspot" coordinates (x, y) where stars seem most dense or bright. 
-         Scale x and y from 0 to 100.
+      1. Short poetic description (max 15 words).
+      2. 2-3 dominant hex colors for stars.
+      3. 5-10 key coordinate points (x,y 0-100) where stars are densest.
     `;
 
-    // Remove header if present (data:image/jpeg;base64,)
     const base64Data = imageBase64.split(',')[1] || imageBase64;
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: {
         parts: [
-          {
-            inlineData: {
-              mimeType: "image/jpeg", // Assuming jpeg/png, API is flexible
-              data: base64Data,
-            },
-          },
+          { inlineData: { mimeType: "image/jpeg", data: base64Data } },
           { text: prompt },
         ],
       },
@@ -67,10 +79,9 @@ export const analyzeNebulaImage = async (
     return JSON.parse(jsonText) as NebulaAnalysis;
   } catch (error) {
     console.error("Gemini Analysis Failed:", error);
-    // Fallback data
     return {
-      description: "A mysterious cosmic cloud in deep space.",
-      dominantColors: ["#ffffff", "#ffd700", "#87ceeb"],
+      description: "A mysterious cosmic cloud.",
+      dominantColors: ["#ffffff", "#ffd700"],
       starHotspots: [],
     };
   }

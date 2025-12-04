@@ -1,6 +1,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { AnimationConfig, ParticleConfig, NebulaAnalysis, Particle, VideoConfig } from '../types';
+import { PlayIcon, PauseIcon, ArrowPathIcon } from '@heroicons/react/24/solid';
 
 interface NebulaCanvasProps {
   imageBase64: string | null;
@@ -8,10 +9,11 @@ interface NebulaCanvasProps {
   animationConfig: AnimationConfig;
   videoConfig: VideoConfig;
   analysis: NebulaAnalysis | undefined;
-  detectedParticles: Particle[] | null; // New Prop
+  detectedParticles: Particle[] | null; 
   isRecording: boolean;
   onRecordingComplete: (url: string) => void;
   triggerPreview: number; 
+  onSetZoomOrigin?: (x: number, y: number) => void;
 }
 
 const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
@@ -24,21 +26,63 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   isRecording,
   onRecordingComplete,
   triggerPreview,
+  onSetZoomOrigin
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(0);
-  const startTimeRef = useRef<number>(0);
+  const lastTimeRef = useRef<number>(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const imageRef = useRef<HTMLImageElement | null>(null);
   
-  // Canvas Resolution State
-  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
+  const starSpriteRef = useRef<HTMLCanvasElement | null>(null);
   
-  // Store particles (either detected or procedural)
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [playbackProgress, setPlaybackProgress] = useState(0); 
+  
+  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
   const [activeParticles, setActiveParticles] = useState<Particle[]>([]);
 
-  // 1. Load Image
+  // Improved Star Sprite: Core Highlight + Blur
+  const createStarSprite = (color: string) => {
+    const size = 64; 
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
+
+    const cx = size / 2;
+    const cy = size / 2;
+    const radius = size / 2;
+
+    // Apply mild Gaussian blur to the whole sprite generation for soft glow
+    ctx.filter = 'blur(1px)';
+
+    const grad = ctx.createRadialGradient(cx, cy, 1, cx, cy, radius);
+    
+    // Stop 0: Pure HOT White Core (Enhanced)
+    grad.addColorStop(0.0, '#FFFFFF'); 
+    grad.addColorStop(0.1, '#FFFFFF'); 
+    
+    // Stop 0.25: User Color (High Intensity)
+    grad.addColorStop(0.25, color);
+    
+    // Stop 0.6: Fade
+    grad.addColorStop(0.6, color.length === 7 ? `${color}40` : color);
+    
+    // Stop 1.0: Transparent
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+    return canvas;
+  };
+
+  useEffect(() => {
+    starSpriteRef.current = createStarSprite(particleConfig.color);
+  }, [particleConfig.color]);
+
   useEffect(() => {
     if (imageBase64) {
       const img = new Image();
@@ -53,7 +97,12 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageBase64]);
 
-  // 2. Update Canvas Size when Config Changes
+  useEffect(() => {
+    setPlaybackProgress(0);
+    setIsPlaying(true);
+    lastTimeRef.current = 0;
+  }, [triggerPreview, isRecording]);
+
   useEffect(() => {
     if (imageRef.current) {
       updateCanvasSize(imageRef.current, videoConfig.resolution);
@@ -66,48 +115,27 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     let h = img.naturalHeight;
 
     if (resolution === '1080p') {
-      // Scale to fit within 1920x1080 while maintaining aspect ratio
-      if (w > h) {
-        w = 1920;
-        h = 1920 / aspect;
-      } else {
-        h = 1080;
-        w = 1080 * aspect;
-      }
+      if (w > h) { w = 1920; h = 1920 / aspect; } 
+      else { h = 1080; w = 1080 * aspect; }
     } else if (resolution === '4k') {
-      // Scale to fit within 3840x2160
-      if (w > h) {
-        w = 3840;
-        h = 3840 / aspect;
-      } else {
-        h = 2160;
-        w = 2160 * aspect;
-      }
+      if (w > h) { w = 3840; h = 3840 / aspect; }
+      else { h = 2160; w = 2160 * aspect; }
     }
-    // 'original' uses natural dimensions
 
-    // Ensure even dimensions for video encoding compatibility
     w = Math.floor(w / 2) * 2;
     h = Math.floor(h / 2) * 2;
 
     setCanvasSize({ width: w, height: h });
   };
 
-  // 3. Handle Particle Generation (Detected vs Procedural)
   useEffect(() => {
-    // Priority: Detected Stars > Procedural Generation
     if (detectedParticles && detectedParticles.length > 0) {
-      // Use the stars found by image analysis (they already have Z values from the service)
       setActiveParticles(detectedParticles);
     } else {
-      // Fallback: Generate procedural random stars
       const generateParticles = (count: number) => {
         const particles: Particle[] = [];
         for (let i = 0; i < count; i++) {
-          // Weighted Z distribution: More stars in background, fewer in foreground
-          // Z ranges roughly 0.0 (far) to 4.0 (very close)
           const z = Math.pow(Math.random(), 3) * 5.0; 
-          
           particles.push({
             x: Math.random(),
             y: Math.random(),
@@ -121,123 +149,176 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     }
   }, [detectedParticles, particleConfig.density]);
 
-  // 4. Animation Loop
-  const animate = useCallback((time: number) => {
+  // Click to set Zoom Origin
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!onSetZoomOrigin || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    onSetZoomOrigin(x, y);
+  };
+
+  const drawFrame = useCallback((progress: number) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx || !imageRef.current) return;
 
-    if (!startTimeRef.current) startTimeRef.current = time;
-    const elapsed = (time - startTimeRef.current) / 1000; // Seconds
-    const progress = Math.min(elapsed / animationConfig.duration, 1);
-
-    // Canvas dimensions
     const cW = canvas.width;
     const cH = canvas.height;
-    const cx = cW / 2;
-    const cy = cH / 2;
+    // Current Zoom Center (Defaults to 0.5, 0.5)
+    const zOriginX = animationConfig.zoomOrigin.x * cW;
+    const zOriginY = animationConfig.zoomOrigin.y * cH;
 
-    // Setup Canvas
+    const elapsedSeconds = progress * animationConfig.duration;
+
     ctx.clearRect(0, 0, cW, cH);
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, cW, cH);
 
-    // -- Global Transform --
-    // We rotate everything together to mimic a camera roll
     const dir = animationConfig.rotationDirection === 'cw' ? 1 : -1;
-    const rotation = (elapsed * (animationConfig.rotationSpeed * 0.2) * dir * Math.PI) / 180;
+    const rotation = (elapsedSeconds * (animationConfig.rotationSpeed * 0.2) * dir * Math.PI) / 180;
     
-    // Linear interpolation for the Background Nebula Scale
     const currentScale = animationConfig.initialScale + (animationConfig.finalScale - animationConfig.initialScale) * progress;
 
     ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(rotation);
     
-    // -- 1. Draw Background Nebula --
-    // The nebula is treated as "infinity", so it scales linearly.
+    // Global Rotate around center of screen (optional: could rotate around zoom origin too, but screen center feels more like camera roll)
+    ctx.translate(cW / 2, cH / 2);
+    ctx.rotate(rotation);
+    ctx.translate(-cW / 2, -cH / 2);
+    
+    // 1. Draw Background
+    // We want to scale "Towards" the zoom origin.
+    // Logic: Translate Origin to 0,0 -> Scale -> Translate back
     ctx.save(); 
+    ctx.translate(zOriginX, zOriginY);
     ctx.scale(currentScale, currentScale);
-    ctx.translate(-cW / 2, -cH / 2); 
+    ctx.translate(-zOriginX, -zOriginY);
     ctx.drawImage(imageRef.current, 0, 0, cW, cH);
     ctx.restore(); 
 
-    // -- 2. Draw Star Particles (3D Parallax) --
-    const { baseSize, brightness, color } = particleConfig;
-    
-    // Reference scale for consistent particle size across resolutions
+    // 2. Draw Particles (3D Parallax relative to Zoom Origin)
+    const { baseSize, brightness, feathering } = particleConfig;
     const canvasDiagonal = Math.sqrt(cW * cW + cH * cH);
-    const refDiagonal = Math.sqrt(800 * 800 + 600 * 600);
+    const refDiagonal = Math.sqrt(800 * 600);
     const resolutionScale = canvasDiagonal / refDiagonal;
 
     ctx.globalCompositeOperation = 'screen'; 
-    ctx.fillStyle = color;
-    ctx.globalAlpha = brightness;
+    
+    // Apply brightness filter to allow > 100% brightness (over-exposure)
+    // If brightness is 2.0, this boosts the image values
+    if (brightness > 0) {
+        ctx.filter = `brightness(${Math.min(brightness * 100, 300)}%)`; 
+    }
 
-    // How much has the camera moved?
-    // If we are at initialScale, delta is 0. If at finalScale, delta is max.
+    // Since we used filter for intensity, we use globalAlpha for fading if < 1
+    ctx.globalAlpha = Math.min(1, brightness); 
+
     const zoomDelta = currentScale - animationConfig.initialScale;
+    const sprite = starSpriteRef.current;
 
-    if (baseSize > 0 && brightness > 0) {
+    if (baseSize > 0 && brightness > 0 && sprite) {
       for (let i = 0; i < activeParticles.length; i++) {
         const p = activeParticles[i];
 
-        // 3D MATH:
-        // We simulate objects being closer (high Z) moving FASTER than the background.
-        // effectiveScale = BaseScale + (MovementAmount * ParallaxFactor)
-        // Multiplying by 2.0 exaggerates the depth effect
-        const parallaxScale = currentScale + (zoomDelta * p.z * 3.0);
+        // Particle actual position in px
+        const pX = p.x * cW;
+        const pY = p.y * cH;
+
+        // Vector from Zoom Origin to Particle
+        const vecX = pX - zOriginX;
+        const vecY = pY - zOriginY;
+
+        // Parallax Logic:
+        // Stars closer (High Z) move away from origin faster
+        const parallaxScale = currentScale + (zoomDelta * p.z * 2.0);
         
-        // Calculate position relative to center
-        // p.x is 0..1, so (p.x - 0.5) centers it at 0
-        const relX = (p.x - 0.5) * cW;
-        const relY = (p.y - 0.5) * cH;
+        // Final screen position relative to origin
+        const finalX = zOriginX + vecX * parallaxScale;
+        const finalY = zOriginY + vecY * parallaxScale;
 
-        // Apply Parallax Scale
-        const drawX = relX * parallaxScale;
-        const drawY = relY * parallaxScale;
-
-        // Calculate Apparent Size
-        // Foreground stars (high Z) also grow larger as they approach the camera
         const depthSizeMultiplier = 1 + (p.z * zoomDelta * 0.5); 
-        const drawSize = baseSize * p.scale * resolutionScale * depthSizeMultiplier;
+        const spriteScaleFactor = (1 + feathering); 
+        
+        const coreSize = baseSize * p.scale * resolutionScale * depthSizeMultiplier;
+        const finalSpriteSize = coreSize * spriteScaleFactor * 8; // Increased sprite usage for better glow
 
-        // Simple Frustum Culling (Optional optimization, good for 4K)
-        if (Math.abs(drawX) > cW * 1.5 || Math.abs(drawY) > cH * 1.5) continue;
+        if (finalX < -finalSpriteSize || finalX > cW + finalSpriteSize || 
+            finalY < -finalSpriteSize || finalY > cH + finalSpriteSize) continue;
 
-        ctx.beginPath();
-        ctx.arc(drawX, drawY, Math.max(0, drawSize), 0, Math.PI * 2);
-        ctx.fill();
+        ctx.drawImage(
+          sprite,
+          finalX - finalSpriteSize / 2, 
+          finalY - finalSpriteSize / 2, 
+          finalSpriteSize, 
+          finalSpriteSize
+        );
       }
     }
+    
+    ctx.restore();
 
-    ctx.restore(); // Restore global rotation
-
-    // Check Stop for Recording
-    if (isRecording && elapsed >= animationConfig.duration) {
-       // Stop logic handled by useEffect dependency/timeout
-    } else {
-      requestRef.current = requestAnimationFrame(animate);
+    // Draw Crosshair for Zoom Origin (Only in UI, not in recording preferably, but useful for preview)
+    if (!isRecording && imageBase64) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(99, 102, 241, 0.5)'; // Indigo
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      const chSize = 10;
+      ctx.moveTo(zOriginX - chSize, zOriginY);
+      ctx.lineTo(zOriginX + chSize, zOriginY);
+      ctx.moveTo(zOriginX, zOriginY - chSize);
+      ctx.lineTo(zOriginX, zOriginY + chSize);
+      ctx.stroke();
+      ctx.restore();
     }
-  }, [animationConfig, particleConfig, activeParticles, isRecording]);
 
-  // Handle Play/Preview Loop
+  }, [animationConfig, particleConfig, activeParticles, isRecording, imageBase64]);
+
+  const animate = useCallback((time: number) => {
+    if (!lastTimeRef.current) lastTimeRef.current = time;
+    const dt = (time - lastTimeRef.current) / 1000;
+    lastTimeRef.current = time;
+
+    if (isPlaying && !isRecording) {
+      setPlaybackProgress(prev => {
+        let next = prev + (dt / animationConfig.duration);
+        if (next >= 1) next = 0; 
+        return next;
+      });
+    } else if (isRecording) {
+       setPlaybackProgress(prev => {
+        const next = prev + (dt / animationConfig.duration);
+        if (next >= 1) return 1; 
+        return next;
+      });
+    }
+
+    requestRef.current = requestAnimationFrame(animate);
+  }, [isPlaying, isRecording, animationConfig.duration]);
+
   useEffect(() => {
-    startTimeRef.current = 0;
+    drawFrame(playbackProgress);
+  }, [playbackProgress, drawFrame]);
+
+  useEffect(() => {
+    lastTimeRef.current = 0;
     requestRef.current = requestAnimationFrame(animate);
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [animate, triggerPreview, canvasSize]);
+  }, [animate]);
 
-  // Handle Recording
   useEffect(() => {
     if (isRecording) {
+      setPlaybackProgress(0);
+      setIsPlaying(true);
+      lastTimeRef.current = 0;
+
       const canvas = canvasRef.current;
       if (!canvas) return;
 
       const stream = canvas.captureStream(30);
-      
       const options: MediaRecorderOptions = {
         mimeType: 'video/webm;codecs=vp9',
         bitsPerSecond: videoConfig.bitrate * 1000000 
@@ -247,7 +328,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       try {
         recorder = new MediaRecorder(stream, options);
       } catch (e) {
-        console.warn("VP9/Bitrate configuration failed, falling back to default.", e);
         recorder = new MediaRecorder(stream);
       }
       
@@ -262,37 +342,81 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         const blob = new Blob(chunksRef.current, { type: 'video/webm' });
         const url = URL.createObjectURL(blob);
         onRecordingComplete(url);
+        setIsPlaying(false);
       };
 
       recorder.start();
-
+      
+      const durationMs = animationConfig.duration * 1000;
       const timeout = setTimeout(() => {
-        if (recorder.state === 'recording') {
-          recorder.stop();
-        }
-      }, animationConfig.duration * 1000);
-
-      startTimeRef.current = 0;
+        if (recorder.state === 'recording') recorder.stop();
+      }, durationMs + 200); 
 
       return () => {
         clearTimeout(timeout);
         if (recorder.state === 'recording') recorder.stop();
       };
     }
-  }, [isRecording, animationConfig.duration, onRecordingComplete, videoConfig.bitrate]);
+  }, [isRecording, animationConfig.duration, videoConfig.bitrate, onRecordingComplete]);
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value);
+    setPlaybackProgress(val);
+    if (isPlaying) setIsPlaying(false); 
+  };
 
   return (
-    <div className="relative w-full aspect-[4/3] rounded-lg overflow-hidden border border-space-700 bg-black shadow-2xl flex items-center justify-center">
+    <div className="relative w-full aspect-[4/3] rounded-lg overflow-hidden border border-space-700 bg-black shadow-2xl flex items-center justify-center group">
       <canvas
         ref={canvasRef}
+        onClick={handleCanvasClick}
         width={canvasSize.width}
         height={canvasSize.height}
-        className="max-w-full max-h-full object-contain"
+        className={`max-w-full max-h-full object-contain ${!isRecording && imageBase64 ? 'cursor-crosshair' : ''}`}
         style={{ width: '100%', height: '100%' }} 
       />
       {!imageBase64 && (
         <div className="absolute inset-0 flex flex-col items-center justify-center text-space-highlight bg-space-800/50 backdrop-blur-sm p-4 text-center">
           <p className="text-base md:text-lg font-light">Upload a nebula image to begin</p>
+        </div>
+      )}
+
+      {imageBase64 && !isRecording && (
+        <div className={`absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent transition-opacity duration-300 ${isPlaying ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={(e) => { e.stopPropagation(); setIsPlaying(!isPlaying); }}
+              className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white backdrop-blur-md transition-colors"
+            >
+              {isPlaying ? <PauseIcon className="w-5 h-5" /> : <PlayIcon className="w-5 h-5" />}
+            </button>
+            
+            <div className="flex-1 flex flex-col justify-end">
+              <input 
+                type="range" 
+                min="0" 
+                max="1" 
+                step="0.001"
+                value={playbackProgress}
+                onChange={handleSeek}
+                onClick={(e) => e.stopPropagation()} 
+                className="w-full accent-space-accent h-1 bg-white/20 rounded-lg appearance-none cursor-pointer"
+              />
+               <div className="flex justify-between text-[10px] text-gray-300 mt-1 font-mono">
+                  <span>{(playbackProgress * animationConfig.duration).toFixed(1)}s</span>
+                  <span>{animationConfig.duration}s</span>
+               </div>
+            </div>
+
+            <button 
+              onClick={(e) => { e.stopPropagation(); setPlaybackProgress(0); setIsPlaying(true); }}
+              className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white backdrop-blur-md transition-colors"
+              title="Restart"
+            >
+              <ArrowPathIcon className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="text-[10px] text-center text-gray-500 mt-2">Click anywhere on image to set Zoom Center</div>
         </div>
       )}
     </div>

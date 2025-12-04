@@ -2,7 +2,7 @@
 import React, { useState, useCallback } from 'react';
 import { ParticleConfig, AnimationConfig, NebulaData, VideoConfig, Particle } from './types';
 import NebulaCanvas from './components/NebulaCanvas';
-import { analyzeNebulaImage } from './services/geminiService';
+import { analyzeNebulaImage, identifyNebulaFromImage } from './services/geminiService';
 import { detectStarsFromImage } from './services/starDetectionService';
 import { 
   SparklesIcon, 
@@ -22,8 +22,13 @@ const App: React.FC = () => {
     imageBase64: null,
   });
   
+  const [isIdentifying, setIsIdentifying] = useState(false);
+
   // UI State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0); // 0-100
+  const [analysisStep, setAnalysisStep] = useState('');
+  
   const [isGenerating, setIsGenerating] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [previewTrigger, setPreviewTrigger] = useState(0);
@@ -37,8 +42,9 @@ const App: React.FC = () => {
   const [particleConfig, setParticleConfig] = useState<ParticleConfig>({
     density: 150,
     baseSize: 1.0,
-    brightness: 0.8,
+    brightness: 1.0, 
     color: '#ffffff',
+    feathering: 1.0, 
   });
 
   const [animationConfig, setAnimationConfig] = useState<AnimationConfig>({
@@ -47,62 +53,84 @@ const App: React.FC = () => {
     rotationDirection: 'cw',
     rotationSpeed: 0.5,
     duration: 5,
+    zoomOrigin: { x: 0.5, y: 0.5 }
   });
 
   const [videoConfig, setVideoConfig] = useState<VideoConfig>({
     resolution: '1080p',
-    bitrate: 5, // 5 Mbps default
+    bitrate: 5, 
   });
 
   // Handlers
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setNebulaData(prev => ({ ...prev, imageBase64: reader.result as string }));
+      reader.onloadend = async () => {
+        const base64 = reader.result as string;
+        setNebulaData(prev => ({ ...prev, imageBase64: base64, identifiedName: undefined }));
         setAnalysisStatus('none');
         setDetectedParticles(null);
         setDetectionMode('procedural');
+        
+        // Auto-Identify
+        setIsIdentifying(true);
+        const name = await identifyNebulaFromImage(base64);
+        setNebulaData(prev => ({ ...prev, identifiedName: name }));
+        setIsIdentifying(false);
       };
       reader.readAsDataURL(file);
     }
   };
 
   const handleAnalysis = async () => {
-    if (!nebulaData.imageBase64 || !nebulaData.name) {
-      alert("Please upload an image and enter a name.");
+    if (!nebulaData.imageBase64) {
+      alert("Please upload an image.");
       return;
     }
     
+    // Use user input name or identified name or 'Unknown'
+    const nameToUse = nebulaData.name || nebulaData.identifiedName || "Unknown Nebula";
+    
     setIsAnalyzing(true);
     setAnalysisStatus('none');
+    setAnalysisProgress(0);
+    
     try {
-      // 1. Gemini Analysis for description and metadata
-      const analysisResult = await analyzeNebulaImage(nebulaData.imageBase64, nebulaData.name);
+      // Parallel Execution for Speed
+      setAnalysisStep('Processing Star Map & AI Analysis...');
+      setAnalysisProgress(20);
+
+      // Launch both AI Analysis and Star Detection efficiently
+      const [analysisResult, stars] = await Promise.all([
+        analyzeNebulaImage(nebulaData.imageBase64, nameToUse),
+        detectStarsFromImage(nebulaData.imageBase64)
+      ]);
       
-      // 2. Star Detection Analysis (StarNet logic)
-      const stars = await detectStarsFromImage(nebulaData.imageBase64);
-      
+      setAnalysisProgress(80);
       setNebulaData(prev => ({ ...prev, analysis: analysisResult }));
       
-      // 3. Fallback Logic: If too few stars found, fallback to procedural
+      // Fallback Logic: Mismatch check
+      // If the image is detected as having very few stars, but user wants stars,
+      // we assume the detection failed (mismatch) and use procedural.
       if (stars.length > 50) {
         setDetectedParticles(stars);
         setDetectionMode('real');
       } else {
         setDetectedParticles(null);
         setDetectionMode('procedural');
-        console.log('Low star count detected, reverting to procedural generation.');
+        console.log('Low star count or mismatch detected, using generated field.');
       }
 
       setAnalysisStatus('success');
+      setAnalysisProgress(100);
       setPreviewTrigger(t => t + 1);
     } catch (e) {
       console.error(e);
       setAnalysisStatus('error');
     } finally {
       setIsAnalyzing(false);
+      setAnalysisStep('');
     }
   };
 
@@ -115,6 +143,10 @@ const App: React.FC = () => {
   const handleRecordingComplete = (url: string) => {
     setIsGenerating(false);
     setVideoUrl(url);
+  };
+
+  const handleSetZoomOrigin = (x: number, y: number) => {
+    setAnimationConfig(prev => ({ ...prev, zoomOrigin: { x, y } }));
   };
 
   return (
@@ -154,44 +186,74 @@ const App: React.FC = () => {
 
             <div>
               <label className="block text-sm text-gray-400 mb-1">Nebula Name</label>
-              <input 
-                type="text" 
-                value={nebulaData.name}
-                onChange={(e) => setNebulaData(prev => ({...prev, name: e.target.value}))}
-                placeholder="e.g. Orion Nebula"
-                className="w-full bg-space-900 border border-space-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-space-accent"
-              />
+              <div className="relative">
+                <input 
+                  type="text" 
+                  value={nebulaData.name}
+                  onChange={(e) => setNebulaData(prev => ({...prev, name: e.target.value}))}
+                  placeholder={isIdentifying ? "Identifying..." : (nebulaData.identifiedName || "e.g. Orion Nebula")}
+                  className="w-full bg-space-900 border border-space-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-space-accent placeholder-gray-600"
+                />
+                {nebulaData.identifiedName && !nebulaData.name && (
+                   <div className="absolute right-2 top-2 text-xs text-space-accent animate-pulse">
+                      AI Detected
+                   </div>
+                )}
+              </div>
+              {nebulaData.identifiedName && (
+                <p className="text-[10px] text-gray-400 mt-1 pl-1">
+                   AI suggests: <span className="text-space-highlight font-mono">{nebulaData.identifiedName}</span>
+                </p>
+              )}
             </div>
 
-            <button 
-              onClick={handleAnalysis}
-              disabled={isAnalyzing || !nebulaData.imageBase64}
-              className={`w-full py-2 rounded-lg font-medium flex items-center justify-center gap-2 transition-all ${
-                isAnalyzing 
-                  ? 'bg-space-700 cursor-not-allowed text-gray-400' 
-                  : 'bg-space-accent hover:bg-indigo-500 text-white shadow-lg shadow-space-accent/25'
-              }`}
-            >
-              {isAnalyzing ? (
-                <>
-                  <ArrowPathIcon className="w-5 h-5 animate-spin" /> Identifying...
-                </>
-              ) : (
-                <>
-                  <SparklesIcon className="w-5 h-5" /> Identify & Analyze
-                </>
+            <div className="space-y-2">
+              <button 
+                onClick={handleAnalysis}
+                disabled={isAnalyzing || !nebulaData.imageBase64}
+                className={`w-full py-2 rounded-lg font-medium flex items-center justify-center gap-2 transition-all ${
+                  isAnalyzing 
+                    ? 'bg-space-700 cursor-not-allowed text-gray-400' 
+                    : 'bg-space-accent hover:bg-indigo-500 text-white shadow-lg shadow-space-accent/25'
+                }`}
+              >
+                {isAnalyzing ? (
+                  <>
+                    <ArrowPathIcon className="w-5 h-5 animate-spin" /> Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <SparklesIcon className="w-5 h-5" /> Identify & Analyze
+                  </>
+                )}
+              </button>
+
+              {/* Progress Bar */}
+              {isAnalyzing && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>{analysisStep}</span>
+                    <span>{analysisProgress}%</span>
+                  </div>
+                  <div className="w-full bg-space-900 rounded-full h-1.5 overflow-hidden border border-space-700">
+                    <div 
+                      className="bg-space-accent h-full transition-all duration-300 ease-out rounded-full"
+                      style={{ width: `${analysisProgress}%` }}
+                    />
+                  </div>
+                </div>
               )}
-            </button>
+            </div>
             
-            {analysisStatus === 'success' && (
+            {analysisStatus === 'success' && !isAnalyzing && (
               <div className="p-3 bg-green-900/20 border border-green-700/50 rounded text-green-400 text-sm">
                 <div className="flex items-center gap-2 mb-1">
-                  <span>✓</span> Identification successful!
+                  <span>✓</span> Analysis complete!
                 </div>
                 <div className="text-xs text-green-300 opacity-80">
                   {detectionMode === 'real' 
-                    ? `Mapped ${detectedParticles?.length} real stars from image.` 
-                    : `Low star visibility. Using generated star field.`}
+                    ? `Mapped ${detectedParticles?.length} real stars.` 
+                    : `Used fallback star field (Mismatch or Low Quality).`}
                 </div>
               </div>
             )}
@@ -222,17 +284,9 @@ const App: React.FC = () => {
                 isRecording={isGenerating}
                 onRecordingComplete={handleRecordingComplete}
                 triggerPreview={previewTrigger}
+                onSetZoomOrigin={handleSetZoomOrigin}
              />
              
-             <div className="absolute top-4 right-4 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
-                <button 
-                  onClick={() => setPreviewTrigger(t => t + 1)}
-                  className="bg-black/50 hover:bg-black/80 text-white px-3 py-1 rounded-full text-xs border border-white/20 backdrop-blur-md flex items-center gap-1"
-                >
-                  <PlayIcon className="w-3 h-3" /> Replay
-                </button>
-             </div>
-
              {isGenerating && (
                 <div className="absolute inset-0 z-50 bg-black/80 flex flex-col items-center justify-center backdrop-blur-sm rounded-lg">
                    <div className="w-16 h-16 border-4 border-space-700 border-t-space-accent rounded-full animate-spin mb-4" />
@@ -328,10 +382,6 @@ const App: React.FC = () => {
                     onChange={(e) => setVideoConfig({...videoConfig, bitrate: parseFloat(e.target.value)})}
                     className="w-full accent-space-accent touch-pan-x"
                   />
-                  <div className="flex justify-between text-[10px] text-gray-500 mt-1">
-                     <span>Low</span>
-                     <span>High Quality</span>
-                  </div>
                 </div>
               </div>
             </div>
@@ -365,7 +415,6 @@ const App: React.FC = () => {
                     onChange={(e) => setParticleConfig({...particleConfig, density: parseFloat(e.target.value)})}
                     className="w-full accent-space-accent touch-pan-x"
                   />
-                  {detectionMode === 'real' && <p className="text-[10px] text-indigo-300 mt-1">Using real star map</p>}
                 </div>
 
                 <div>
@@ -374,22 +423,39 @@ const App: React.FC = () => {
                     <span className="text-space-highlight">{Math.round(particleConfig.brightness * 100)}%</span>
                   </label>
                   <input 
-                    type="range" min="0" max="1" step="0.05"
+                    type="range" min="0" max="3" step="0.05"
                     value={particleConfig.brightness}
                     onChange={(e) => setParticleConfig({...particleConfig, brightness: parseFloat(e.target.value)})}
                     className="w-full accent-space-accent touch-pan-x"
                   />
+                  <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                     <span>Off</span>
+                     <span>Max Overdrive</span>
+                  </div>
                 </div>
 
                 <div>
                   <label className="flex justify-between text-sm mb-1">
                     <span>Size</span>
-                    <span className="text-space-highlight">{particleConfig.baseSize}x</span>
+                    <span className="text-space-highlight">{particleConfig.baseSize.toFixed(2)}x</span>
                   </label>
                   <input 
-                    type="range" min="0" max="5" step="0.1"
+                    type="range" min="0" max="2" step="0.01"
                     value={particleConfig.baseSize}
                     onChange={(e) => setParticleConfig({...particleConfig, baseSize: parseFloat(e.target.value)})}
+                    className="w-full accent-space-accent touch-pan-x"
+                  />
+                </div>
+                
+                <div>
+                  <label className="flex justify-between text-sm mb-1">
+                    <span>Glow / Feathering Gain</span>
+                    <span className="text-space-highlight">{particleConfig.feathering.toFixed(1)}x</span>
+                  </label>
+                  <input 
+                    type="range" min="0" max="3" step="0.1"
+                    value={particleConfig.feathering}
+                    onChange={(e) => setParticleConfig({...particleConfig, feathering: parseFloat(e.target.value)})}
                     className="w-full accent-space-accent touch-pan-x"
                   />
                 </div>

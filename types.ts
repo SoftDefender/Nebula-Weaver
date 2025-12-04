@@ -9,8 +9,9 @@ export interface VideoConfig {
 export interface ParticleConfig {
   density: number; // Number of particles
   baseSize: number;
-  brightness: number; // Global opacity 0-1
+  brightness: number; // Global opacity/intensity 0-3
   color: string; // Hex color
+  feathering: number; // Glow/Feather expansion factor (0-3)
 }
 
 export interface AnimationConfig {
@@ -19,10 +20,12 @@ export interface AnimationConfig {
   rotationDirection: 'cw' | 'ccw'; // clockwise, counter-clockwise
   rotationSpeed: number;
   duration: number; // in seconds
+  zoomOrigin: { x: number; y: number }; // Normalized 0-1, default 0.5, 0.5
 }
 
 export interface NebulaData {
   name: string;
+  identifiedName?: string; // Name guessed by AI
   imageBase64: string | null;
   analysis?: NebulaAnalysis;
 }
