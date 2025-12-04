@@ -13,7 +13,7 @@ export interface ParticleConfig {
   baseSize: number;
   brightness: number; // Global opacity/intensity 0-3
   color: string; // Hex color
-  feathering: number; // Glow/Feather expansion factor (0-3)
+  feathering: number; // Glow/Feather expansion factor (-3 to 3)
 }
 
 export interface AnimationConfig {
@@ -25,17 +25,21 @@ export interface AnimationConfig {
   zoomOrigin: { x: number; y: number }; // Normalized 0-1, default 0.5, 0.5
 }
 
-export interface NebulaData {
-  name: string;
-  identifiedName?: string; // Name guessed by AI
-  imageBase64: string | null;
-  analysis?: NebulaAnalysis;
-}
-
 export interface NebulaAnalysis {
   description: string;
   dominantColors: string[];
   starHotspots: { x: number; y: number }[]; 
+}
+
+export interface BatchItem {
+  id: string;
+  name: string; // User edited or final name
+  identifiedName?: string; // AI Guess
+  imageBase64: string;
+  status: 'idle' | 'analyzing' | 'success' | 'error';
+  analysis?: NebulaAnalysis;
+  detectedParticles: Particle[] | null;
+  detectionMode: 'real' | 'ai-map' | 'procedural';
 }
 
 export interface Particle {
