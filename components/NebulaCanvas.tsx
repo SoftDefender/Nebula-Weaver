@@ -2,7 +2,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { AnimationConfig, ParticleConfig, NebulaAnalysis, Particle, VideoConfig } from '../types';
 import { PlayIcon, PauseIcon, ArrowPathIcon } from '@heroicons/react/24/solid';
-import { createAndroidMotionPhoto, createIOSLivePhotoZip } from '../services/exportService';
 
 interface NebulaCanvasProps {
   imageBase64: string | null;
@@ -39,7 +38,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const imageRef = useRef<HTMLImageElement | null>(null);
-  const stillImageBlobRef = useRef<Blob | null>(null);
   
   const starSpriteRef = useRef<HTMLCanvasElement | null>(null);
   const spriteCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
@@ -121,7 +119,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     setIsImageLoaded(false);
     imageRef.current = null; 
     hasCompletedRef.current = false; // Reset lock
-    stillImageBlobRef.current = null;
 
     if (imageBase64) {
       const img = new Image();
@@ -217,11 +214,16 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         const safeCount = Math.min(count, MAX_PARTICLES);
         for (let i = 0; i < safeCount; i++) {
           const z = Math.pow(Math.random(), 3) * 5.0; 
+          // Discrete random size and brightness (alpha)
+          const scale = 0.3 + Math.pow(Math.random(), 2) * 1.5; // Skew towards smaller, some distinct large
+          const alpha = 0.4 + Math.random() * 0.6; // Discrete brightness variance
+
           particles.push({
             x: Math.random(),
             y: Math.random(),
             z: z, 
-            scale: 0.5 + Math.random() * 1.0, 
+            scale: scale,
+            alpha: alpha 
           });
         }
         return particles;
@@ -279,7 +281,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     ctx.restore(); 
 
     // --- 2. Draw Particles ---
-    const { baseSize, feathering, brightness } = particleConfig;
+    const { baseSize, feathering, brightness, spikeGain, spikeThreshold, spikeAngle } = particleConfig;
     const canvasDiagonal = Math.sqrt(cW * cW + cH * cH);
     const refDiagonal = Math.sqrt(800 * 600);
     const resolutionScale = canvasDiagonal / refDiagonal;
@@ -303,6 +305,13 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       const pLen = activeParticles.length;
       for (let i = 0; i < pLen; i++) {
         const p = activeParticles[i];
+
+        // Apply individual particle alpha if present (procedural variance)
+        if (p.alpha !== undefined) {
+           ctx.globalAlpha = Math.min(1, brightness * p.alpha);
+        } else {
+           ctx.globalAlpha = Math.min(1, brightness);
+        }
 
         let sprite = starSpriteRef.current;
         if (p.color) {
@@ -332,6 +341,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         
         if (finalSpriteSize < 0.5) continue;
 
+        // Draw Star Body
         ctx.drawImage(
           sprite,
           finalX - finalSpriteSize / 2, 
@@ -339,6 +349,49 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
           finalSpriteSize, 
           finalSpriteSize
         );
+
+        // --- 3. Draw Star Spikes (Diffraction) ---
+        // Threshold check: Apparent brightness/size vs threshold
+        // Using a simpler threshold logic: scale * brightness. 
+        // With brightness up to 3 and scale ~1-2, intensity can be 6.
+        const apparentIntensity = p.scale * brightness;
+        
+        if (spikeGain > 0 && apparentIntensity > spikeThreshold) {
+            const spikeLen = finalSpriteSize * (1.0 + spikeGain * 2.0);
+            const halfSpike = spikeLen / 2;
+            const spikeWidth = finalSpriteSize * 0.1; // Thin center
+
+            ctx.save();
+            ctx.translate(finalX, finalY);
+            
+            // Apply configured rotation
+            if (spikeAngle && spikeAngle !== 0) {
+                ctx.rotate((spikeAngle * Math.PI) / 180);
+            }
+            
+            ctx.fillStyle = p.color || particleConfig.color || '#FFFFFF';
+            // Use lighter composite for spikes
+            ctx.globalCompositeOperation = 'screen';
+            // Fade spikes slightly based on how much they exceed threshold for smoother transition
+            const spikeOpacity = Math.min(1, (apparentIntensity - spikeThreshold) * 0.5);
+            ctx.globalAlpha = Math.min(1, brightness * 0.8 * spikeOpacity);
+
+            // Horizontal Spike
+            ctx.beginPath();
+            ctx.moveTo(-halfSpike, 0);
+            ctx.quadraticCurveTo(0, -spikeWidth, halfSpike, 0);
+            ctx.quadraticCurveTo(0, spikeWidth, -halfSpike, 0);
+            ctx.fill();
+
+            // Vertical Spike
+            ctx.beginPath();
+            ctx.moveTo(0, -halfSpike);
+            ctx.quadraticCurveTo(-spikeWidth, 0, 0, halfSpike);
+            ctx.quadraticCurveTo(spikeWidth, 0, 0, -halfSpike);
+            ctx.fill();
+
+            ctx.restore();
+        }
       }
     }
     
@@ -405,8 +458,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       setIsPlaying(true);
       lastTimeRef.current = 0;
       chunksRef.current = [];
-      stillImageBlobRef.current = null;
-
+      
       const canvas = canvasRef.current;
       if (!canvas) return;
       
@@ -424,14 +476,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
                console.warn(`[Mobile Optimization] Clamping export settings: FPS ${videoConfig.fps}->${safeFPS}, Bitrate ${videoConfig.bitrate}->${safeBitrate}Mbps to prevent crash.`);
              }
 
-             // --- Capture Still Image for Live Photos ---
-             const isLive = videoConfig.format.startsWith('live-');
-             if (isLive) {
-                canvas.toBlob((blob) => {
-                    if (blob) stillImageBlobRef.current = blob;
-                }, 'image/jpeg', 0.95);
-             }
-
              // --- Recording Start ---
              const stream = canvas.captureStream(safeFPS);
              if (stream.getTracks().length === 0 || !stream.active) {
@@ -447,7 +491,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
              const requestedFormat = videoConfig.format;
              
              // Check Format Support
-             if (requestedFormat === 'mp4' || requestedFormat === 'mov' || requestedFormat.startsWith('live-')) {
+             if (requestedFormat === 'mp4' || requestedFormat === 'mov') {
                 if (MediaRecorder.isTypeSupported('video/mp4')) {
                     mimeType = 'video/mp4'; 
                 } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
@@ -488,31 +532,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
                hasCompletedRef.current = true;
 
                const blobType = mediaRecorderRef.current?.mimeType || 'video/webm';
-               let finalBlob = new Blob(chunksRef.current, { type: blobType });
+               const finalBlob = new Blob(chunksRef.current, { type: blobType });
                
-               // Handle Live Formats Packaging
-               if (requestedFormat.startsWith('live-')) {
-                  const videoBlob = finalBlob;
-                  const stillBlob = stillImageBlobRef.current;
-                  
-                  if (stillBlob) {
-                      try {
-                        if (requestedFormat === 'live-android') {
-                            finalBlob = await createAndroidMotionPhoto(stillBlob, videoBlob);
-                        } else if (requestedFormat === 'live-ios') {
-                            // Parent will need a name, but we don't have it here. 
-                            // We can use a default name, the download attribute in App.tsx handles the actual file name.
-                            finalBlob = await createIOSLivePhotoZip(stillBlob, videoBlob, "IMG"); 
-                        }
-                      } catch (e) {
-                          console.error("Live Photo Packaging Failed", e);
-                          // Fallback to video
-                      }
-                  } else {
-                      console.warn("Missing still image for Live Photo, exporting video only.");
-                  }
-               }
-
                const url = URL.createObjectURL(finalBlob);
                onRecordingComplete(url);
                setIsPlaying(false);

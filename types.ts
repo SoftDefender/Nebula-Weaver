@@ -1,6 +1,6 @@
 
 export type Resolution = '1080p' | '4k' | 'original';
-export type ExportFormat = 'webm' | 'mp4' | 'mkv' | 'mov' | 'live-android' | 'live-ios';
+export type ExportFormat = 'webm' | 'mp4' | 'mkv' | 'mov';
 
 export interface VideoConfig {
   resolution: Resolution;
@@ -15,6 +15,9 @@ export interface ParticleConfig {
   brightness: number; // Global opacity/intensity 0-3
   color: string; // Hex color
   feathering: number; // Glow/Feather expansion factor (-3 to 3)
+  spikeGain: number; // Star spike length/intensity
+  spikeThreshold: number; // Minimum scale/brightness to show spikes
+  spikeAngle: number; // Rotation in degrees
 }
 
 export interface AnimationConfig {
@@ -49,5 +52,6 @@ export interface Particle {
   y: number; // Normalized 0-1
   z: number; // Depth factor (parallax)
   scale: number; // Size variation factor
+  alpha?: number; // Individual brightness/opacity variance
   color?: string; // Specific star color if detected
 }

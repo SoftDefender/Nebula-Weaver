@@ -18,8 +18,6 @@ import {
   Square2StackIcon,
   ArrowDownTrayIcon,
   CheckCircleIcon,
-  DevicePhoneMobileIcon,
-  LockClosedIcon
 } from '@heroicons/react/24/solid';
 
 const App: React.FC = () => {
@@ -46,7 +44,10 @@ const App: React.FC = () => {
     baseSize: 1.4,
     brightness: 2.0, 
     color: '#ffffff',
-    feathering: -0.4, 
+    feathering: -0.4,
+    spikeGain: 0.0,
+    spikeThreshold: 0.8,
+    spikeAngle: 45 // Default 45 degrees
   });
 
   const [animationConfig, setAnimationConfig] = useState<AnimationConfig>({
@@ -67,36 +68,6 @@ const App: React.FC = () => {
 
   // Derived State for Active Item
   const activeItem = useMemo(() => batchItems[activeIndex] || null, [batchItems, activeIndex]);
-  const isLiveFormat = videoConfig.format === 'live-android' || videoConfig.format === 'live-ios';
-
-  // Helper to detect OS
-  const getMobileOS = () => {
-    const ua = navigator.userAgent || navigator.vendor || (window as any).opera;
-    if (/android/i.test(ua)) {
-      return 'android';
-    }
-    if (/iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
-      return 'ios';
-    }
-    return 'android'; // Default to Android if desktop or unknown
-  };
-
-  // Handle Format Change with Auto-Detect Logic
-  const handleFormatChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = e.target.value;
-    
-    if (val === 'live-auto') {
-      const os = getMobileOS();
-      const targetFormat = os === 'ios' ? 'live-ios' : 'live-android';
-      setVideoConfig(prev => ({ ...prev, format: targetFormat as ExportFormat }));
-      setAnimationConfig(prev => ({ ...prev, duration: 5 })); // Force 5s for Live
-    } else {
-      setVideoConfig(prev => ({ ...prev, format: val as ExportFormat }));
-      if (val === 'live-android' || val === 'live-ios') {
-        setAnimationConfig(prev => ({ ...prev, duration: 5 }));
-      }
-    }
-  };
 
   // Handlers
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -221,7 +192,8 @@ const App: React.FC = () => {
                      x, y,
                      z: Math.pow(Math.random(), 3) * 5.0,
                      scale: 0.5 + Math.random(),
-                     color: analysisResult.dominantColors?.[0] || '#ffffff'
+                     color: analysisResult.dominantColors?.[0] || '#ffffff',
+                     alpha: 0.5 + Math.random() * 0.5
                    });
                 }
              }
@@ -308,13 +280,6 @@ const App: React.FC = () => {
     
     // Filename logic
     let ext: string = videoConfig.format;
-    
-    // Handle Live Photo Extensions
-    if (videoConfig.format === 'live-android') {
-        ext = 'jpg'; // Android Motion Photo is a JPG
-    } else if (videoConfig.format === 'live-ios') {
-        ext = 'zip'; // iOS Bundle is a Zip
-    }
     
     downloadLink.download = `${currentName}-animation.${ext}`;
     document.body.appendChild(downloadLink);
@@ -582,7 +547,7 @@ const App: React.FC = () => {
                         <span className="text-xs font-bold truncate text-gray-300" title={video.name}>{video.name}</span>
                         <a 
                           href={video.url} 
-                          download={`${video.name}-animation.${videoConfig.format.replace('live-android', 'jpg').replace('live-ios', 'zip')}`}
+                          download={`${video.name}-animation.${videoConfig.format}`}
                           className="text-xs bg-space-700 hover:bg-space-600 px-2 py-1 rounded text-white transition-colors whitespace-nowrap"
                         >
                           Download
@@ -638,18 +603,14 @@ const App: React.FC = () => {
                   <div>
                     <label className="block text-xs text-gray-400 mb-1">Format</label>
                      <select 
-                        value={videoConfig.format.startsWith('live-') ? 'live-auto' : videoConfig.format}
-                        onChange={handleFormatChange}
+                        value={videoConfig.format}
+                        onChange={(e) => setVideoConfig(prev => ({ ...prev, format: e.target.value as ExportFormat }))}
                         className="w-full bg-space-900 border border-space-700 rounded p-2 text-sm text-gray-200"
                      >
                         <option value="mp4">MP4</option>
                         <option value="webm">WebM</option>
                         <option value="mkv">MKV</option>
                         <option value="mov">MOV</option>
-                        <option disabled>──────</option>
-                        <option value="live-auto">Live Wallpaper (Auto Detect)</option>
-                        <option value="live-android">Live (Android)</option>
-                        <option value="live-ios">Live (iOS)</option>
                      </select>
                   </div>
                    <div>
@@ -657,14 +618,6 @@ const App: React.FC = () => {
                      <div className="text-xs text-space-highlight mb-1 text-right">{videoConfig.bitrate} Mbps</div>
                   </div>
                 </div>
-
-                {/* Show detected OS for Live format */}
-                {(isLiveFormat) && (
-                  <div className="flex items-center gap-2 text-xs bg-indigo-900/40 text-indigo-300 p-2 rounded border border-indigo-500/30">
-                     <DevicePhoneMobileIcon className="w-4 h-4" />
-                     Mode: {videoConfig.format === 'live-ios' ? 'iOS Live Photo Video' : 'Android Live Wallpaper'}
-                  </div>
-                )}
 
                 <div>
                   <input 
@@ -772,6 +725,46 @@ const App: React.FC = () => {
                 </div>
 
                 <div>
+                  <label className="flex justify-between text-sm mb-1">
+                    <span>Star Spikes (Diffraction)</span>
+                    <span className="text-space-highlight">{particleConfig.spikeGain.toFixed(2)}</span>
+                  </label>
+                  <input 
+                    type="range" min="0" max="2" step="0.01"
+                    value={particleConfig.spikeGain}
+                    onChange={(e) => setParticleConfig({...particleConfig, spikeGain: parseFloat(e.target.value)})}
+                    className="w-full accent-space-accent touch-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="flex justify-between text-sm mb-1">
+                    <span>Spike Threshold</span>
+                    <span className="text-space-highlight">{particleConfig.spikeThreshold.toFixed(2)}</span>
+                  </label>
+                  <input 
+                    type="range" min="0" max="4.0" step="0.01"
+                    value={particleConfig.spikeThreshold}
+                    onChange={(e) => setParticleConfig({...particleConfig, spikeThreshold: parseFloat(e.target.value)})}
+                    className="w-full accent-space-accent touch-none"
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">Lower value = more stars show spikes</p>
+                </div>
+
+                <div>
+                  <label className="flex justify-between text-sm mb-1">
+                    <span>Spike Angle</span>
+                    <span className="text-space-highlight">{particleConfig.spikeAngle}°</span>
+                  </label>
+                  <input 
+                    type="range" min="0" max="180" step="1"
+                    value={particleConfig.spikeAngle}
+                    onChange={(e) => setParticleConfig({...particleConfig, spikeAngle: parseInt(e.target.value)})}
+                    className="w-full accent-space-accent touch-none"
+                  />
+                </div>
+
+                <div>
                   <label className="block text-sm mb-1 text-gray-400">Particle Color</label>
                   <div className="flex items-center gap-2">
                     <input 
@@ -842,11 +835,10 @@ const App: React.FC = () => {
                 />
               </div>
 
-               <div className={isLiveFormat ? 'opacity-70' : ''}>
+               <div>
                 <label className="flex justify-between text-sm mb-1">
                   <div className="flex items-center gap-2">
                     <span>Duration</span>
-                    {isLiveFormat && <LockClosedIcon className="w-3 h-3 text-space-highlight" />}
                   </div>
                   <span className="text-space-highlight">{animationConfig.duration}s</span>
                 </label>
@@ -854,8 +846,7 @@ const App: React.FC = () => {
                   type="range" min="1" max="15" step="1"
                   value={animationConfig.duration}
                   onChange={(e) => setAnimationConfig({...animationConfig, duration: parseFloat(e.target.value)})}
-                  disabled={isLiveFormat}
-                  className={`w-full accent-space-accent touch-none ${isLiveFormat ? 'cursor-not-allowed grayscale opacity-50' : ''}`}
+                  className={`w-full accent-space-accent touch-none`}
                 />
               </div>
             </div>
