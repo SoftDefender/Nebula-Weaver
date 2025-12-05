@@ -352,14 +352,19 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
         // --- 3. Draw Star Spikes (Diffraction) ---
         // Threshold check: Apparent brightness/size vs threshold
-        // Using a simpler threshold logic: scale * brightness. 
-        // With brightness up to 3 and scale ~1-2, intensity can be 6.
         const apparentIntensity = p.scale * brightness;
         
         if (spikeGain > 0 && apparentIntensity > spikeThreshold) {
-            const spikeLen = finalSpriteSize * (1.0 + spikeGain * 2.0);
+            // Decouple spike dimensions from feathering to keep them sharp and not bloated
+            // Use coreSize (physics size) and brightness for spike dimensions
+            const unfeatheredSize = coreSize * brightnessBloom * 8;
+            
+            // Length scales with Gain, use multiplier to extend beyond the glow
+            const spikeLen = unfeatheredSize * (1.5 + spikeGain * 5.0); 
             const halfSpike = spikeLen / 2;
-            const spikeWidth = finalSpriteSize * 0.1; // Thin center
+            
+            // Width is kept very thin relative to size to appear sharp
+            const spikeWidth = unfeatheredSize * 0.035; 
 
             ctx.save();
             ctx.translate(finalX, finalY);
@@ -374,7 +379,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
             ctx.globalCompositeOperation = 'screen';
             // Fade spikes slightly based on how much they exceed threshold for smoother transition
             const spikeOpacity = Math.min(1, (apparentIntensity - spikeThreshold) * 0.5);
-            ctx.globalAlpha = Math.min(1, brightness * 0.8 * spikeOpacity);
+            ctx.globalAlpha = Math.min(1, brightness * 0.9 * spikeOpacity);
 
             // Horizontal Spike
             ctx.beginPath();
