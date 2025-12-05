@@ -227,9 +227,9 @@ const App: React.FC = () => {
   const handleExportAll = () => {
     if (batchItems.length === 0) return;
     setGeneratedVideos([]); 
+    setIsGenerating(false); // Do NOT start until component remounts/signals ready
     setBatchExportIndex(0); 
     setActiveIndex(0); // Start at beginning
-    setIsGenerating(false); // Do NOT start until component remounts and signals ready
   };
 
   // Handshake: Called by NebulaCanvas when a new image is fully loaded and painted

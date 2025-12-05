@@ -114,6 +114,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
   // Image Loading Logic
   useEffect(() => {
+    // Reset state on new image
     setIsImageLoaded(false);
     imageRef.current = null; 
 
@@ -124,15 +125,26 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         imageRef.current = img;
         updateCanvasSize(img, videoConfig.resolution, isRecording);
         setIsImageLoaded(true);
-        // Signal Parent that we are ready for recording
-        if (onImageReady) {
-            // Short delay to ensure state updates (like canvas size) have propagated
-            setTimeout(onImageReady, 50);
-        }
+        // Note: We do NOT call onImageReady here directly anymore to avoid race conditions.
+        // The useEffect below handles it.
       };
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageBase64, isMobile]); 
+  }, [imageBase64, isMobile]); // Remove onImageReady from dependencies here
+
+  // Handshake Synchronization Effect
+  // This ensures that if the image is loaded AND the parent is ready to receive the signal (onImageReady exists),
+  // we fire the signal. This covers both "Image just loaded" and "Image was already loaded when export started" cases.
+  useEffect(() => {
+    if (isImageLoaded && onImageReady) {
+        // Small timeout to ensure the render cycle is complete
+        const t = setTimeout(() => {
+            onImageReady();
+        }, 50);
+        return () => clearTimeout(t);
+    }
+  }, [isImageLoaded, onImageReady]);
+
 
   useEffect(() => {
     setPlaybackProgress(0);
@@ -446,7 +458,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
            if (recorder.state === 'recording') recorder.stop();
          }, durationMs + 500); 
 
-      }, 100); // Shorter timeout needed now due to clean mounting
+      }, 200); // Increased safety timeout slightly
     }
 
     return () => {
