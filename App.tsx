@@ -101,11 +101,14 @@ const App: React.FC = () => {
     if (newItems.length === 1) {
        const item = newItems[0];
        const name = await identifyNebulaFromImage(item.imageBase64);
-       setBatchItems(prev => {
-         const copy = [...prev];
-         copy[0] = { ...copy[0], identifiedName: name };
-         return copy;
-       });
+       // Check if name is generic unknown, if so keep filename
+       if (!name.toLowerCase().includes('unknown')) {
+          setBatchItems(prev => {
+            const copy = [...prev];
+            copy[0] = { ...copy[0], identifiedName: name };
+            return copy;
+          });
+       }
     }
   };
 
@@ -136,9 +139,17 @@ const App: React.FC = () => {
         let nameToUse = item.name;
         if (totalItems > 1 || !item.identifiedName) {
            const aiName = await identifyNebulaFromImage(item.imageBase64);
-           currentItems[i].identifiedName = aiName;
-           currentItems[i].name = aiName; // Apply AI name automatically in batch
-           nameToUse = aiName;
+           
+           // Only overwrite if AI name is not "Unknown"
+           if (!aiName.toLowerCase().includes('unknown')) {
+               currentItems[i].identifiedName = aiName;
+               currentItems[i].name = aiName; 
+               nameToUse = aiName;
+           } else {
+               currentItems[i].identifiedName = "Unknown Nebula";
+               // Do NOT overwrite item.name here, keep original filename
+               nameToUse = item.name; 
+           }
         } else {
            // Single item mode: use whatever is in .name (could be user edited)
            nameToUse = item.name;
@@ -238,7 +249,8 @@ const App: React.FC = () => {
      if (batchExportIndex !== null && batchExportIndex === activeIndex) {
          if (!isGenerating) {
              console.log("Image Ready signal received. Starting Generation for index:", activeIndex);
-             setIsGenerating(true);
+             // Small buffer time to ensure UI/State is settled
+             setTimeout(() => setIsGenerating(true), 200);
          }
      }
   }, [batchExportIndex, activeIndex, isGenerating]);
@@ -471,7 +483,7 @@ const App: React.FC = () => {
                 <div className="absolute inset-0 z-50 bg-black/80 flex flex-col items-center justify-center backdrop-blur-sm rounded-lg">
                    <div className="w-16 h-16 border-4 border-space-700 border-t-space-accent rounded-full animate-spin mb-4" />
                    <h3 className="text-xl font-bold text-white">
-                     {batchExportIndex !== null ? `Batch Exporting (${(batchExportIndex || 0) + 1}/${batchItems.length})...` : 'Rendering Video...'}
+                     {batchExportIndex !== null ? `Batch Exporting (${Math.min((batchExportIndex || 0) + 1, batchItems.length)}/${batchItems.length})...` : 'Rendering Video...'}
                    </h3>
                    <p className="text-gray-400">Resolution: {videoConfig.resolution} • {videoConfig.format.toUpperCase()} • {videoConfig.fps} FPS</p>
                 </div>

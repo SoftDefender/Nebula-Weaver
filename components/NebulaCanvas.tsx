@@ -41,6 +41,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   
   const starSpriteRef = useRef<HTMLCanvasElement | null>(null);
   const spriteCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const hasCompletedRef = useRef(false); // Lock to prevent double-firing completion
 
   const [isPlaying, setIsPlaying] = useState(true);
   const [playbackProgress, setPlaybackProgress] = useState(0); 
@@ -117,6 +118,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     // Reset state on new image
     setIsImageLoaded(false);
     imageRef.current = null; 
+    hasCompletedRef.current = false; // Reset lock
 
     if (imageBase64) {
       const img = new Image();
@@ -125,16 +127,12 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         imageRef.current = img;
         updateCanvasSize(img, videoConfig.resolution, isRecording);
         setIsImageLoaded(true);
-        // Note: We do NOT call onImageReady here directly anymore to avoid race conditions.
-        // The useEffect below handles it.
       };
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageBase64, isMobile]); // Remove onImageReady from dependencies here
+  }, [imageBase64, isMobile]); 
 
   // Handshake Synchronization Effect
-  // This ensures that if the image is loaded AND the parent is ready to receive the signal (onImageReady exists),
-  // we fire the signal. This covers both "Image just loaded" and "Image was already loaded when export started" cases.
   useEffect(() => {
     if (isImageLoaded && onImageReady) {
         // Small timeout to ensure the render cycle is complete
@@ -164,12 +162,18 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     let h = img.naturalHeight;
 
     if (recording) {
-      if (resolution === '1080p') {
+      // Force 1080p max on mobile even if export is recording, to prevent GPU crash
+      if (isMobile) {
         if (w > h) { w = 1920; h = 1920 / aspect; } 
         else { h = 1080; w = 1080 * aspect; }
-      } else if (resolution === '4k') {
-        if (w > h) { w = 3840; h = 3840 / aspect; }
-        else { h = 2160; w = 2160 * aspect; }
+      } else {
+        if (resolution === '1080p') {
+          if (w > h) { w = 1920; h = 1920 / aspect; } 
+          else { h = 1080; w = 1080 * aspect; }
+        } else if (resolution === '4k') {
+          if (w > h) { w = 3840; h = 3840 / aspect; }
+          else { h = 2160; w = 2160 * aspect; }
+        }
       }
     } else {
       const MOBILE_MAX_WIDTH = 1080;
@@ -391,9 +395,9 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
   // Video Recording Logic
   useEffect(() => {
-    let timeout: ReturnType<typeof setTimeout>;
     
     if (isRecording && isImageLoaded) {
+      hasCompletedRef.current = false;
       setPlaybackProgress(0);
       setIsPlaying(true);
       lastTimeRef.current = 0;
@@ -402,67 +406,82 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       const canvas = canvasRef.current;
       if (!canvas) return;
       
-      // Wait a frame for paint
-      timeout = setTimeout(() => {
-         drawFrame(0);
+      // Warm-up sequence: Draw frame 0 twice to ensure buffer is flushed
+      requestAnimationFrame(() => {
+        drawFrame(0);
+        requestAnimationFrame(() => {
+             drawFrame(0);
+             
+             // --- Recording Start ---
+             const stream = canvas.captureStream(videoConfig.fps);
+             if (stream.getTracks().length === 0 || !stream.active) {
+                console.error("Stream failed to initialize or has no tracks.");
+                // Emergency abort if stream fails (prevents infinite hang)
+                if (!hasCompletedRef.current) {
+                     hasCompletedRef.current = true;
+                     setIsPlaying(false);
+                }
+                return;
+             }
 
-         const stream = canvas.captureStream(videoConfig.fps);
-         
-         let mimeType = 'video/webm;codecs=vp9';
-         const requestedFormat = videoConfig.format;
-         if (requestedFormat === 'mp4' || requestedFormat === 'mov') {
-            if (MediaRecorder.isTypeSupported('video/mp4')) {
-                mimeType = 'video/mp4'; 
-            } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
-                mimeType = 'video/mp4;codecs=h264,aac';
-            }
-         } else if (requestedFormat === 'mkv') {
-            if (MediaRecorder.isTypeSupported('video/x-matroska')) {
-                mimeType = 'video/x-matroska';
-            }
-         }
+             let mimeType = 'video/webm;codecs=vp9';
+             const requestedFormat = videoConfig.format;
+             if (requestedFormat === 'mp4' || requestedFormat === 'mov') {
+                if (MediaRecorder.isTypeSupported('video/mp4')) {
+                    mimeType = 'video/mp4'; 
+                } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
+                    mimeType = 'video/mp4;codecs=h264,aac';
+                }
+             } else if (requestedFormat === 'mkv') {
+                if (MediaRecorder.isTypeSupported('video/x-matroska')) {
+                    mimeType = 'video/x-matroska';
+                }
+             }
+    
+             const options: MediaRecorderOptions = {
+               mimeType: mimeType,
+               bitsPerSecond: videoConfig.bitrate * 1000000 
+             };
+    
+             let recorder: MediaRecorder;
+             try {
+               recorder = new MediaRecorder(stream, options);
+             } catch (e) {
+               console.warn('Failed to create recorder with options', options, e);
+               recorder = new MediaRecorder(stream);
+             }
+             
+             mediaRecorderRef.current = recorder;
+    
+             recorder.ondataavailable = (e) => {
+               if (e.data.size > 0) chunksRef.current.push(e.data);
+             };
+    
+             recorder.onstop = () => {
+               if (hasCompletedRef.current) return;
+               hasCompletedRef.current = true;
 
-         const options: MediaRecorderOptions = {
-           mimeType: mimeType,
-           bitsPerSecond: videoConfig.bitrate * 1000000 
-         };
+               const blobType = mediaRecorderRef.current?.mimeType || 'video/webm';
+               const blob = new Blob(chunksRef.current, { type: blobType });
+               const url = URL.createObjectURL(blob);
+               onRecordingComplete(url);
+               setIsPlaying(false);
+             };
+    
+             if (recorder.state === 'inactive') {
+                recorder.start();
+             }
+    
+             const durationMs = animationConfig.duration * 1000;
+             setTimeout(() => {
+               if (recorder.state === 'recording') recorder.stop();
+             }, durationMs + 500); 
 
-         let recorder: MediaRecorder;
-         try {
-           recorder = new MediaRecorder(stream, options);
-         } catch (e) {
-           console.warn('Failed to create recorder with options', options, e);
-           recorder = new MediaRecorder(stream);
-         }
-         
-         mediaRecorderRef.current = recorder;
-
-         recorder.ondataavailable = (e) => {
-           if (e.data.size > 0) chunksRef.current.push(e.data);
-         };
-
-         recorder.onstop = () => {
-           const blobType = mediaRecorderRef.current?.mimeType || 'video/webm';
-           const blob = new Blob(chunksRef.current, { type: blobType });
-           const url = URL.createObjectURL(blob);
-           onRecordingComplete(url);
-           setIsPlaying(false);
-         };
-
-         if (recorder.state === 'inactive') {
-            recorder.start();
-         }
-
-         const durationMs = animationConfig.duration * 1000;
-         setTimeout(() => {
-           if (recorder.state === 'recording') recorder.stop();
-         }, durationMs + 500); 
-
-      }, 200); // Increased safety timeout slightly
+        });
+      });
     }
 
     return () => {
-      if (timeout) clearTimeout(timeout);
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop();
       }
