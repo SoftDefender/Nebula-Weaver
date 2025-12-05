@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { ParticleConfig, AnimationConfig, VideoConfig, Particle, ExportFormat, BatchItem } from './types';
 import NebulaCanvas from './components/NebulaCanvas';
@@ -17,7 +16,9 @@ import {
   ChevronRightIcon,
   Square2StackIcon,
   ArrowDownTrayIcon,
-  CheckCircleIcon
+  CheckCircleIcon,
+  DevicePhoneMobileIcon,
+  LockClosedIcon
 } from '@heroicons/react/24/solid';
 
 const App: React.FC = () => {
@@ -65,6 +66,36 @@ const App: React.FC = () => {
 
   // Derived State for Active Item
   const activeItem = useMemo(() => batchItems[activeIndex] || null, [batchItems, activeIndex]);
+  const isLiveFormat = videoConfig.format === 'live-android' || videoConfig.format === 'live-ios';
+
+  // Helper to detect OS
+  const getMobileOS = () => {
+    const ua = navigator.userAgent || navigator.vendor || (window as any).opera;
+    if (/android/i.test(ua)) {
+      return 'android';
+    }
+    if (/iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
+      return 'ios';
+    }
+    return 'android'; // Default to Android if desktop or unknown
+  };
+
+  // Handle Format Change with Auto-Detect Logic
+  const handleFormatChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value;
+    
+    if (val === 'live-auto') {
+      const os = getMobileOS();
+      const targetFormat = os === 'ios' ? 'live-ios' : 'live-android';
+      setVideoConfig(prev => ({ ...prev, format: targetFormat as ExportFormat }));
+      setAnimationConfig(prev => ({ ...prev, duration: 5 })); // Force 5s for Live
+    } else {
+      setVideoConfig(prev => ({ ...prev, format: val as ExportFormat }));
+      if (val === 'live-android' || val === 'live-ios') {
+        setAnimationConfig(prev => ({ ...prev, duration: 5 }));
+      }
+    }
+  };
 
   // Handlers
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -266,7 +297,12 @@ const App: React.FC = () => {
     // Auto Download Helper
     const downloadLink = document.createElement('a');
     downloadLink.href = url;
-    downloadLink.download = `${currentName}-animation.${videoConfig.format}`;
+    
+    // Filename logic
+    let ext = videoConfig.format;
+    if (ext === 'live-android' || ext === 'live-ios') ext = 'mp4'; // Default to mp4 container
+    
+    downloadLink.download = `${currentName}-animation.${ext}`;
     document.body.appendChild(downloadLink);
     downloadLink.click();
     document.body.removeChild(downloadLink);
@@ -588,14 +624,18 @@ const App: React.FC = () => {
                   <div>
                     <label className="block text-xs text-gray-400 mb-1">Format</label>
                      <select 
-                        value={videoConfig.format}
-                        onChange={(e) => setVideoConfig({...videoConfig, format: e.target.value as ExportFormat})}
+                        value={videoConfig.format.startsWith('live-') ? 'live-auto' : videoConfig.format}
+                        onChange={handleFormatChange}
                         className="w-full bg-space-900 border border-space-700 rounded p-2 text-sm text-gray-200"
                      >
                         <option value="mp4">MP4</option>
                         <option value="webm">WebM</option>
                         <option value="mkv">MKV</option>
                         <option value="mov">MOV</option>
+                        <option disabled>──────</option>
+                        <option value="live-auto">Live Wallpaper (Auto Detect)</option>
+                        <option value="live-android">Live (Android)</option>
+                        <option value="live-ios">Live (iOS)</option>
                      </select>
                   </div>
                    <div>
@@ -603,6 +643,14 @@ const App: React.FC = () => {
                      <div className="text-xs text-space-highlight mb-1 text-right">{videoConfig.bitrate} Mbps</div>
                   </div>
                 </div>
+
+                {/* Show detected OS for Live format */}
+                {(isLiveFormat) && (
+                  <div className="flex items-center gap-2 text-xs bg-indigo-900/40 text-indigo-300 p-2 rounded border border-indigo-500/30">
+                     <DevicePhoneMobileIcon className="w-4 h-4" />
+                     Mode: {videoConfig.format === 'live-ios' ? 'iOS Live Photo Video' : 'Android Live Wallpaper'}
+                  </div>
+                )}
 
                 <div>
                   <input 
@@ -780,16 +828,20 @@ const App: React.FC = () => {
                 />
               </div>
 
-               <div>
+               <div className={isLiveFormat ? 'opacity-70' : ''}>
                 <label className="flex justify-between text-sm mb-1">
-                  <span>Duration</span>
+                  <div className="flex items-center gap-2">
+                    <span>Duration</span>
+                    {isLiveFormat && <LockClosedIcon className="w-3 h-3 text-space-highlight" />}
+                  </div>
                   <span className="text-space-highlight">{animationConfig.duration}s</span>
                 </label>
                 <input 
                   type="range" min="1" max="15" step="1"
                   value={animationConfig.duration}
                   onChange={(e) => setAnimationConfig({...animationConfig, duration: parseFloat(e.target.value)})}
-                  className="w-full accent-space-accent touch-none"
+                  disabled={isLiveFormat}
+                  className={`w-full accent-space-accent touch-none ${isLiveFormat ? 'cursor-not-allowed grayscale opacity-50' : ''}`}
                 />
               </div>
             </div>

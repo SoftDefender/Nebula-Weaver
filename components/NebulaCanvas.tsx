@@ -434,7 +434,9 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
              let mimeType = 'video/webm;codecs=vp9';
              const requestedFormat = videoConfig.format;
-             if (requestedFormat === 'mp4' || requestedFormat === 'mov') {
+             
+             // Check Format Support
+             if (requestedFormat === 'mp4' || requestedFormat === 'mov' || requestedFormat === 'live-android' || requestedFormat === 'live-ios') {
                 if (MediaRecorder.isTypeSupported('video/mp4')) {
                     mimeType = 'video/mp4'; 
                 } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {

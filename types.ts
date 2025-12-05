@@ -1,6 +1,6 @@
 
 export type Resolution = '1080p' | '4k' | 'original';
-export type ExportFormat = 'webm' | 'mp4' | 'mkv' | 'mov';
+export type ExportFormat = 'webm' | 'mp4' | 'mkv' | 'mov' | 'live-android' | 'live-ios';
 
 export interface VideoConfig {
   resolution: Resolution;
