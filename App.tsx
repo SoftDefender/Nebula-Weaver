@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { ParticleConfig, AnimationConfig, VideoConfig, Particle, ExportFormat, BatchItem } from './types';
 import NebulaCanvas from './components/NebulaCanvas';
@@ -42,10 +43,10 @@ const App: React.FC = () => {
   // Configuration State (Shared across batch)
   const [particleConfig, setParticleConfig] = useState<ParticleConfig>({
     density: 150,
-    baseSize: 1.0,
-    brightness: 1.0, 
+    baseSize: 1.4,
+    brightness: 2.0, 
     color: '#ffffff',
-    feathering: 1.0, 
+    feathering: -0.4, 
   });
 
   const [animationConfig, setAnimationConfig] = useState<AnimationConfig>({
@@ -102,8 +103,15 @@ const App: React.FC = () => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
-    // Limit to 10
-    const filesToProcess = files.slice(0, 10);
+    // Limit based on device
+    const isMobileWidth = window.innerWidth < 768;
+    const maxFiles = isMobileWidth ? 5 : 10;
+
+    const filesToProcess = files.slice(0, maxFiles);
+    
+    if (files.length > maxFiles) {
+      console.warn(`Upload limited to ${maxFiles} files on ${isMobileWidth ? 'mobile' : 'desktop'}.`);
+    }
     
     // Read all files to Base64
     const newItems: BatchItem[] = await Promise.all(filesToProcess.map(async (file) => {
@@ -299,8 +307,14 @@ const App: React.FC = () => {
     downloadLink.href = url;
     
     // Filename logic
-    let ext = videoConfig.format;
-    if (ext === 'live-android' || ext === 'live-ios') ext = 'mp4'; // Default to mp4 container
+    let ext: string = videoConfig.format;
+    
+    // Handle Live Photo Extensions
+    if (videoConfig.format === 'live-android') {
+        ext = 'jpg'; // Android Motion Photo is a JPG
+    } else if (videoConfig.format === 'live-ios') {
+        ext = 'zip'; // iOS Bundle is a Zip
+    }
     
     downloadLink.download = `${currentName}-animation.${ext}`;
     document.body.appendChild(downloadLink);
@@ -363,7 +377,7 @@ const App: React.FC = () => {
           
           <div className="space-y-4">
             <div>
-              <label className="block text-sm text-gray-400 mb-1">Nebula Images (Max 10)</label>
+              <label className="block text-sm text-gray-400 mb-1">Nebula Images (Max 5 Mobile / 10 PC)</label>
               <input 
                 type="file" 
                 multiple
@@ -568,7 +582,7 @@ const App: React.FC = () => {
                         <span className="text-xs font-bold truncate text-gray-300" title={video.name}>{video.name}</span>
                         <a 
                           href={video.url} 
-                          download={`${video.name}-animation.${videoConfig.format}`}
+                          download={`${video.name}-animation.${videoConfig.format.replace('live-android', 'jpg').replace('live-ios', 'zip')}`}
                           className="text-xs bg-space-700 hover:bg-space-600 px-2 py-1 rounded text-white transition-colors whitespace-nowrap"
                         >
                           Download

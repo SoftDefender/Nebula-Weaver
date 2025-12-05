@@ -2,6 +2,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { AnimationConfig, ParticleConfig, NebulaAnalysis, Particle, VideoConfig } from '../types';
 import { PlayIcon, PauseIcon, ArrowPathIcon } from '@heroicons/react/24/solid';
+import { createAndroidMotionPhoto, createIOSLivePhotoZip } from '../services/exportService';
 
 interface NebulaCanvasProps {
   imageBase64: string | null;
@@ -38,6 +39,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const imageRef = useRef<HTMLImageElement | null>(null);
+  const stillImageBlobRef = useRef<Blob | null>(null);
   
   const starSpriteRef = useRef<HTMLCanvasElement | null>(null);
   const spriteCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
@@ -119,6 +121,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     setIsImageLoaded(false);
     imageRef.current = null; 
     hasCompletedRef.current = false; // Reset lock
+    stillImageBlobRef.current = null;
 
     if (imageBase64) {
       const img = new Image();
@@ -402,6 +405,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       setIsPlaying(true);
       lastTimeRef.current = 0;
       chunksRef.current = [];
+      stillImageBlobRef.current = null;
 
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -413,12 +417,19 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
              drawFrame(0);
              
              // --- Mobile Safety Guard ---
-             // Force limits on mobile to prevent crash on high settings (120fps/50mbps)
              const safeFPS = isMobile ? Math.min(videoConfig.fps, 30) : videoConfig.fps;
              const safeBitrate = isMobile ? Math.min(videoConfig.bitrate, 8) : videoConfig.bitrate;
              
              if (isMobile && (videoConfig.fps > 30 || videoConfig.bitrate > 8)) {
                console.warn(`[Mobile Optimization] Clamping export settings: FPS ${videoConfig.fps}->${safeFPS}, Bitrate ${videoConfig.bitrate}->${safeBitrate}Mbps to prevent crash.`);
+             }
+
+             // --- Capture Still Image for Live Photos ---
+             const isLive = videoConfig.format.startsWith('live-');
+             if (isLive) {
+                canvas.toBlob((blob) => {
+                    if (blob) stillImageBlobRef.current = blob;
+                }, 'image/jpeg', 0.95);
              }
 
              // --- Recording Start ---
@@ -436,7 +447,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
              const requestedFormat = videoConfig.format;
              
              // Check Format Support
-             if (requestedFormat === 'mp4' || requestedFormat === 'mov' || requestedFormat === 'live-android' || requestedFormat === 'live-ios') {
+             if (requestedFormat === 'mp4' || requestedFormat === 'mov' || requestedFormat.startsWith('live-')) {
                 if (MediaRecorder.isTypeSupported('video/mp4')) {
                     mimeType = 'video/mp4'; 
                 } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
@@ -472,13 +483,37 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
                if (e.data.size > 0) chunksRef.current.push(e.data);
              };
     
-             recorder.onstop = () => {
+             recorder.onstop = async () => {
                if (hasCompletedRef.current) return;
                hasCompletedRef.current = true;
 
                const blobType = mediaRecorderRef.current?.mimeType || 'video/webm';
-               const blob = new Blob(chunksRef.current, { type: blobType });
-               const url = URL.createObjectURL(blob);
+               let finalBlob = new Blob(chunksRef.current, { type: blobType });
+               
+               // Handle Live Formats Packaging
+               if (requestedFormat.startsWith('live-')) {
+                  const videoBlob = finalBlob;
+                  const stillBlob = stillImageBlobRef.current;
+                  
+                  if (stillBlob) {
+                      try {
+                        if (requestedFormat === 'live-android') {
+                            finalBlob = await createAndroidMotionPhoto(stillBlob, videoBlob);
+                        } else if (requestedFormat === 'live-ios') {
+                            // Parent will need a name, but we don't have it here. 
+                            // We can use a default name, the download attribute in App.tsx handles the actual file name.
+                            finalBlob = await createIOSLivePhotoZip(stillBlob, videoBlob, "IMG"); 
+                        }
+                      } catch (e) {
+                          console.error("Live Photo Packaging Failed", e);
+                          // Fallback to video
+                      }
+                  } else {
+                      console.warn("Missing still image for Live Photo, exporting video only.");
+                  }
+               }
+
+               const url = URL.createObjectURL(finalBlob);
                onRecordingComplete(url);
                setIsPlaying(false);
              };
