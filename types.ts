@@ -6,6 +6,7 @@ export interface VideoConfig {
   resolution: Resolution;
   bitrate: number; // Mbps
   format: ExportFormat;
+  fps: number; // Frames per second
 }
 
 export interface ParticleConfig {

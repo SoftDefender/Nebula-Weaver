@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { AnimationConfig, ParticleConfig, NebulaAnalysis, Particle, VideoConfig } from '../types';
 import { PlayIcon, PauseIcon, ArrowPathIcon } from '@heroicons/react/24/solid';
@@ -14,6 +15,7 @@ interface NebulaCanvasProps {
   triggerPreview: number; 
   zoomOrigin: { x: number; y: number }; // Received from parent
   onSetZoomOrigin?: (x: number, y: number) => void;
+  onImageReady?: () => void; // Handshake signal
 }
 
 const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
@@ -27,7 +29,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   onRecordingComplete,
   triggerPreview,
   zoomOrigin,
-  onSetZoomOrigin
+  onSetZoomOrigin,
+  onImageReady
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(0);
@@ -45,6 +48,9 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
   const [activeParticles, setActiveParticles] = useState<Particle[]>([]);
   const [isMobile, setIsMobile] = useState(false);
+  
+  // Track image load status
+  const [isImageLoaded, setIsImageLoaded] = useState(false);
 
   useEffect(() => {
     setIsMobile(window.innerWidth < 768);
@@ -76,31 +82,19 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     const grad = ctx.createRadialGradient(cx, cy, 1, cx, cy, radius);
     
     // Gradient Stops Logic
-    // Stop 0: Pure HOT White Core
     grad.addColorStop(0.0, '#FFFFFF'); 
     grad.addColorStop(0.15, '#FFFFFF'); 
-    
-    // Stop 0.3: User Color (High Intensity)
     grad.addColorStop(0.3, color);
     
-    // Stop Edge: Fade
-    // If Feathering is negative (sharpening), we pull the transparent stop closer to the core
     let edgeStop = 1.0;
     if (feathering < 0) {
-      // Range -3 to 0.
-      // At 0, stop is 1.0 (Standard).
-      // At -3, stop is ~0.35 (Very Sharp, close to the 0.3 color stop).
-      const t = Math.abs(feathering) / 3.0; // 0 to 1
+      const t = Math.abs(feathering) / 3.0; 
       edgeStop = 1.0 - (t * 0.65); 
     }
 
-    // Stop Fade: Mid-way color fade
     const fadeColor = color.length === 7 ? `${color}40` : color;
-    // We adjust the fade point slightly if sharpening
     const fadePoint = 0.6 * edgeStop;
     grad.addColorStop(Math.max(0.31, fadePoint), fadeColor);
-    
-    // Stop 1.0 (or calculated edge): Transparent
     grad.addColorStop(edgeStop, 'rgba(0,0,0,0)');
 
     ctx.fillStyle = grad;
@@ -111,25 +105,31 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   };
 
   useEffect(() => {
-    // Clean cache if it gets too large (memory protection)
     if (spriteCacheRef.current.size > 200) {
       spriteCacheRef.current.clear();
     }
-    // Update default sprite
     starSpriteRef.current = createStarSprite(particleConfig.color, particleConfig.feathering);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [particleConfig.color, particleConfig.feathering]);
 
+  // Image Loading Logic
   useEffect(() => {
+    setIsImageLoaded(false);
+    imageRef.current = null; 
+
     if (imageBase64) {
       const img = new Image();
       img.src = imageBase64;
       img.onload = () => {
         imageRef.current = img;
         updateCanvasSize(img, videoConfig.resolution, isRecording);
+        setIsImageLoaded(true);
+        // Signal Parent that we are ready for recording
+        if (onImageReady) {
+            // Short delay to ensure state updates (like canvas size) have propagated
+            setTimeout(onImageReady, 50);
+        }
       };
-    } else {
-      imageRef.current = null;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageBase64, isMobile]); 
@@ -138,7 +138,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     setPlaybackProgress(0);
     setIsPlaying(true);
     lastTimeRef.current = 0;
-  }, [triggerPreview, isRecording]);
+  }, [triggerPreview]); 
 
   useEffect(() => {
     if (imageRef.current) {
@@ -151,7 +151,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     let w = img.naturalWidth;
     let h = img.naturalHeight;
 
-    // If RECORDING, honor the requested resolution strictly
     if (recording) {
       if (resolution === '1080p') {
         if (w > h) { w = 1920; h = 1920 / aspect; } 
@@ -161,9 +160,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         else { h = 2160; w = 2160 * aspect; }
       }
     } else {
-      // PREVIEW MODE OPTIMIZATION
       const MOBILE_MAX_WIDTH = 1080;
-      
       if (isMobile && w > MOBILE_MAX_WIDTH) {
          w = MOBILE_MAX_WIDTH;
          h = MOBILE_MAX_WIDTH / aspect;
@@ -230,13 +227,15 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     const cW = canvas.width;
     const cH = canvas.height;
     
-    // Use passed Zoom Origin
+    // Safety check for empty canvas dimensions
+    if (cW === 0 || cH === 0) return;
+    
     const zOriginX = zoomOrigin.x * cW;
     const zOriginY = zoomOrigin.y * cH;
 
     const elapsedSeconds = progress * animationConfig.duration;
 
-    // Clear and Fill Black
+    // Clear
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, cW, cH);
 
@@ -246,7 +245,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     const currentScale = animationConfig.initialScale + (animationConfig.finalScale - animationConfig.initialScale) * progress;
 
     ctx.save();
-    
     ctx.translate(cW / 2, cH / 2);
     ctx.rotate(rotation);
     ctx.translate(-cW / 2, -cH / 2);
@@ -257,10 +255,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     ctx.scale(currentScale, currentScale);
     ctx.translate(-zOriginX, -zOriginY);
 
-    // FIX: Background is drawn at full opacity, INDEPENDENT of star brightness
     ctx.globalAlpha = 1.0;
     ctx.drawImage(imageRef.current, 0, 0, cW, cH);
-    
     ctx.restore(); 
 
     // --- 2. Draw Particles ---
@@ -270,24 +266,18 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     const resolutionScale = canvasDiagonal / refDiagonal;
 
     ctx.globalCompositeOperation = 'screen'; 
-    
-    // Brightness for stars handled via alpha
     ctx.globalAlpha = Math.min(1, brightness); 
 
     const zoomDelta = currentScale - animationConfig.initialScale;
     const internalSizeMultiplier = 0.25;
 
-    // Calculate Feathering Scale Logic
     let spriteScaleMultiplier = 1.0;
     if (feathering >= 0) {
-      // Positive: Expansion (Glow)
       spriteScaleMultiplier = 1.0 + feathering;
     } else {
-      // Negative: Contraction/Sharpening
       spriteScaleMultiplier = 1.0;
     }
 
-    // Additional star bloom if brightness is very high
     const brightnessBloom = brightness > 1.5 ? (1 + (brightness - 1.5) * 0.5) : 1.0;
 
     if (baseSize > 0 && brightness > 0) {
@@ -295,7 +285,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       for (let i = 0; i < pLen; i++) {
         const p = activeParticles[i];
 
-        // Determine sprite to use
         let sprite = starSpriteRef.current;
         if (p.color) {
            sprite = createStarSprite(p.color, feathering);
@@ -307,22 +296,18 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         const pX = p.x * cW;
         const pY = p.y * cH;
         
-        // Parallax Math
         const vecX = pX - zOriginX;
         const vecY = pY - zOriginY;
         const parallaxScale = currentScale + (zoomDelta * p.z * 2.0);
         const finalX = zOriginX + vecX * parallaxScale;
         const finalY = zOriginY + vecY * parallaxScale;
         
-        // Culling
         const margin = 100 * resolutionScale;
         if (finalX < -margin || finalX > cW + margin || 
             finalY < -margin || finalY > cH + margin) continue;
 
         const depthSizeMultiplier = 1 + (p.z * zoomDelta * 0.5); 
-        
         const spriteScaleFactor = spriteScaleMultiplier * brightnessBloom; 
-        
         const coreSize = (baseSize * internalSizeMultiplier) * p.scale * resolutionScale * depthSizeMultiplier;
         const finalSpriteSize = coreSize * spriteScaleFactor * 8; 
         
@@ -392,27 +377,25 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     };
   }, [animate]);
 
-  // Video Recording Logic - FIX for 0-byte issue
+  // Video Recording Logic
   useEffect(() => {
     let timeout: ReturnType<typeof setTimeout>;
     
-    if (isRecording) {
-      // 1. Reset Playback
+    if (isRecording && isImageLoaded) {
       setPlaybackProgress(0);
       setIsPlaying(true);
       lastTimeRef.current = 0;
-      chunksRef.current = []; // STRICT RESET
+      chunksRef.current = [];
 
       const canvas = canvasRef.current;
       if (!canvas) return;
       
-      // 2. WAIT for canvas to settle/redraw at least once
-      // This timeout ensures the canvas resize (triggered by updateCanvasSize) has finished painting
+      // Wait a frame for paint
       timeout = setTimeout(() => {
-         // Create Stream
-         const stream = canvas.captureStream(30);
+         drawFrame(0);
+
+         const stream = canvas.captureStream(videoConfig.fps);
          
-         // Format Selection Logic
          let mimeType = 'video/webm;codecs=vp9';
          const requestedFormat = videoConfig.format;
          if (requestedFormat === 'mp4' || requestedFormat === 'mov') {
@@ -454,18 +437,16 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
            setIsPlaying(false);
          };
 
-         // Start
          if (recorder.state === 'inactive') {
             recorder.start();
          }
 
-         // Stop Schedule
          const durationMs = animationConfig.duration * 1000;
          setTimeout(() => {
            if (recorder.state === 'recording') recorder.stop();
          }, durationMs + 500); 
 
-      }, 500); // 500ms delay to ensure canvas is ready
+      }, 100); // Shorter timeout needed now due to clean mounting
     }
 
     return () => {
@@ -474,7 +455,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         mediaRecorderRef.current.stop();
       }
     };
-  }, [isRecording, animationConfig.duration, videoConfig.bitrate, videoConfig.format, onRecordingComplete]);
+  }, [isRecording, isImageLoaded, animationConfig.duration, videoConfig.bitrate, videoConfig.format, videoConfig.fps, onRecordingComplete]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);

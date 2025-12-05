@@ -16,7 +16,8 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   Square2StackIcon,
-  ArrowDownTrayIcon
+  ArrowDownTrayIcon,
+  CheckCircleIcon
 } from '@heroicons/react/24/solid';
 
 const App: React.FC = () => {
@@ -32,7 +33,9 @@ const App: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [batchExportIndex, setBatchExportIndex] = useState<number | null>(null);
 
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  // Store multiple generated videos
+  const [generatedVideos, setGeneratedVideos] = useState<{url: string, name: string}[]>([]);
+  
   const [previewTrigger, setPreviewTrigger] = useState(0);
   
   // Configuration State (Shared across batch)
@@ -56,7 +59,8 @@ const App: React.FC = () => {
   const [videoConfig, setVideoConfig] = useState<VideoConfig>({
     resolution: '1080p',
     bitrate: 5, 
-    format: 'mp4'
+    format: 'mp4',
+    fps: 30
   });
 
   // Derived State for Active Item
@@ -91,7 +95,7 @@ const App: React.FC = () => {
 
     setBatchItems(newItems);
     setActiveIndex(0);
-    setVideoUrl(null);
+    setGeneratedVideos([]); // Clear previous results
 
     // If SINGLE file, perform standard "Auto Identify Name" but don't full analyze yet (Original Logic)
     if (newItems.length === 1) {
@@ -212,76 +216,77 @@ const App: React.FC = () => {
 
   // --- Export Logic ---
   
-  // Single Export
   const handleGenerateVideo = () => {
     if (!activeItem) return;
     setIsGenerating(true);
-    setVideoUrl(null);
+    // Don't clear generatedVideos here if you want to keep history, or clear if single mode
+    if (batchItems.length === 1) setGeneratedVideos([]);
   };
 
   // Batch Export Trigger
   const handleExportAll = () => {
     if (batchItems.length === 0) return;
-    setBatchExportIndex(0); // Start Queue
+    setGeneratedVideos([]); 
+    setBatchExportIndex(0); 
+    setActiveIndex(0); // Start at beginning
+    setIsGenerating(false); // Do NOT start until component remounts and signals ready
   };
 
-  // Batch Export Effect Loop
-  useEffect(() => {
-    if (batchExportIndex !== null) {
-      // 1. Switch to the target item
-      if (activeIndex !== batchExportIndex) {
-         setActiveIndex(batchExportIndex);
-         return; // Wait for next render
-      }
-
-      // 2. Wait a tick to ensure Canvas prop updates, then Start Generation
-      if (!isGenerating) {
-         setIsGenerating(true);
-         setVideoUrl(null);
-      }
-    }
+  // Handshake: Called by NebulaCanvas when a new image is fully loaded and painted
+  const handleImageReady = useCallback(() => {
+     // If we are in the middle of a batch export sequence, AND we are at the correct index
+     if (batchExportIndex !== null && batchExportIndex === activeIndex) {
+         if (!isGenerating) {
+             console.log("Image Ready signal received. Starting Generation for index:", activeIndex);
+             setIsGenerating(true);
+         }
+     }
   }, [batchExportIndex, activeIndex, isGenerating]);
+
 
   // Export Completion Handler
   const handleRecordingComplete = useCallback((url: string) => {
     setIsGenerating(false);
     
+    // Get current item info
+    const currentName = batchItems[activeIndex]?.name || 'nebula';
+    
     // Auto Download Helper
     const downloadLink = document.createElement('a');
     downloadLink.href = url;
-    downloadLink.download = `${batchItems[activeIndex]?.name || 'nebula'}-animation.${videoConfig.format}`;
+    downloadLink.download = `${currentName}-animation.${videoConfig.format}`;
     document.body.appendChild(downloadLink);
     downloadLink.click();
     document.body.removeChild(downloadLink);
 
-    setVideoUrl(url); // For single view display
+    // Add to history
+    setGeneratedVideos(prev => [...prev, { url, name: currentName }]);
 
-    // If Batch Exporting, Move Next
+    // Move to next item in batch
     if (batchExportIndex !== null) {
-      if (batchExportIndex < batchItems.length - 1) {
-        // Move to next after a short delay
-        setTimeout(() => setBatchExportIndex(prev => (prev !== null ? prev + 1 : null)), 500);
-      } else {
-        // Finished
-        setBatchExportIndex(null);
-      }
+      setBatchExportIndex(prev => {
+        if (prev !== null && prev < batchItems.length - 1) {
+          const nextIndex = prev + 1;
+          setActiveIndex(nextIndex); // Trigger state change -> triggers component remount
+          return nextIndex;
+        } else {
+          return null; // Finished
+        }
+      });
     }
   }, [batchExportIndex, batchItems, activeIndex, videoConfig.format]);
 
 
   const handleSetZoomOrigin = (x: number, y: number) => {
-    // Update PER ITEM
     updateActiveItem({ zoomOrigin: { x, y } });
   };
 
   const handlePrev = () => {
      setActiveIndex(prev => Math.max(0, prev - 1));
-     setVideoUrl(null);
   };
 
   const handleNext = () => {
      setActiveIndex(prev => Math.min(batchItems.length - 1, prev + 1));
-     setVideoUrl(null);
   };
 
   return (
@@ -445,7 +450,9 @@ const App: React.FC = () => {
                </>
              )}
 
+             {/* KEY prop forces remount on image change, ensuring fresh canvas state */}
              <NebulaCanvas 
+                key={activeItem?.id || 'canvas-placeholder'}
                 imageBase64={activeItem?.imageBase64 || null}
                 particleConfig={particleConfig}
                 animationConfig={animationConfig}
@@ -457,15 +464,16 @@ const App: React.FC = () => {
                 triggerPreview={previewTrigger}
                 zoomOrigin={activeItem?.zoomOrigin || { x: 0.5, y: 0.5 }}
                 onSetZoomOrigin={handleSetZoomOrigin}
+                onImageReady={handleImageReady}
              />
              
              {isGenerating && (
                 <div className="absolute inset-0 z-50 bg-black/80 flex flex-col items-center justify-center backdrop-blur-sm rounded-lg">
                    <div className="w-16 h-16 border-4 border-space-700 border-t-space-accent rounded-full animate-spin mb-4" />
                    <h3 className="text-xl font-bold text-white">
-                     {batchExportIndex !== null ? `Batch Exporting (${activeIndex + 1}/${batchItems.length})...` : 'Rendering Video...'}
+                     {batchExportIndex !== null ? `Batch Exporting (${(batchExportIndex || 0) + 1}/${batchItems.length})...` : 'Rendering Video...'}
                    </h3>
-                   <p className="text-gray-400">Resolution: {videoConfig.resolution} • {videoConfig.format.toUpperCase()}</p>
+                   <p className="text-gray-400">Resolution: {videoConfig.resolution} • {videoConfig.format.toUpperCase()} • {videoConfig.fps} FPS</p>
                 </div>
              )}
           </div>
@@ -496,31 +504,39 @@ const App: React.FC = () => {
              </button>
           </div>
 
-          {videoUrl && batchExportIndex === null && (
-            <div className="animate-fade-in-up bg-space-800/50 border border-space-700 rounded-xl p-4 md:p-6">
-              <h3 className="text-lg font-bold mb-4 text-green-400 flex items-center gap-2">
-                 <span>✓</span> Generation Complete
+          {/* Generated Videos List */}
+          {generatedVideos.length > 0 && batchExportIndex === null && (
+            <div className="animate-fade-in-up bg-space-800/50 border border-space-700 rounded-xl p-4 md:p-6 space-y-4">
+               <h3 className="text-lg font-bold text-green-400 flex items-center gap-2">
+                 <CheckCircleIcon className="w-6 h-6" />
+                 Generated Videos ({generatedVideos.length})
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
-                 <video src={videoUrl} controls className="w-full rounded-lg shadow-lg border border-space-700 bg-black" />
-                 <div className="space-y-4">
-                    <p className="text-gray-300 text-sm">
-                      Your animation for <span className="text-white font-bold">{activeItem?.name}</span> is ready.
-                    </p>
-                    <a 
-                      href={videoUrl} 
-                      download={`${activeItem?.name || 'nebula'}-animation.${videoConfig.format}`}
-                      className="block w-full text-center py-2 bg-space-700 hover:bg-space-600 text-white rounded-lg border border-space-600 transition-colors"
-                    >
-                      Download Video (.{videoConfig.format})
-                    </a>
-                    <button 
-                       onClick={() => setVideoUrl(null)}
-                       className="block w-full text-center text-sm text-gray-500 hover:text-white"
-                    >
-                       Dismiss
-                    </button>
-                 </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {generatedVideos.map((video, idx) => (
+                  <div key={idx} className="bg-space-900 rounded-lg p-3 border border-space-700 flex flex-col gap-3">
+                     <video src={video.url} controls className="w-full aspect-video rounded border border-space-800 bg-black" />
+                     <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold truncate text-gray-300" title={video.name}>{video.name}</span>
+                        <a 
+                          href={video.url} 
+                          download={`${video.name}-animation.${videoConfig.format}`}
+                          className="text-xs bg-space-700 hover:bg-space-600 px-2 py-1 rounded text-white transition-colors whitespace-nowrap"
+                        >
+                          Download
+                        </a>
+                     </div>
+                  </div>
+                ))}
+              </div>
+              
+              <div className="flex justify-end">
+                  <button 
+                      onClick={() => setGeneratedVideos([])}
+                      className="text-sm text-gray-500 hover:text-white"
+                   >
+                      Clear List
+                   </button>
               </div>
             </div>
           )}
@@ -583,8 +599,22 @@ const App: React.FC = () => {
                     onChange={(e) => setVideoConfig({...videoConfig, bitrate: parseFloat(e.target.value)})}
                     className="w-full accent-space-accent touch-none"
                   />
-                  <p className="text-[10px] text-gray-500 mt-1">Bitrate applies to export only</p>
                 </div>
+
+                {/* FPS Slider */}
+                <div>
+                   <div className="flex justify-between items-center mb-1">
+                      <label className="block text-xs text-gray-400">Frame Rate (FPS)</label>
+                      <div className="text-xs text-space-highlight">{videoConfig.fps} FPS</div>
+                   </div>
+                   <input 
+                      type="range" min="15" max="120" step="1"
+                      value={videoConfig.fps}
+                      onChange={(e) => setVideoConfig({...videoConfig, fps: parseInt(e.target.value)})}
+                      className="w-full accent-space-accent touch-none"
+                   />
+                </div>
+
               </div>
             </div>
             
