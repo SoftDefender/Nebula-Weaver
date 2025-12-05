@@ -412,11 +412,19 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         requestAnimationFrame(() => {
              drawFrame(0);
              
+             // --- Mobile Safety Guard ---
+             // Force limits on mobile to prevent crash on high settings (120fps/50mbps)
+             const safeFPS = isMobile ? Math.min(videoConfig.fps, 30) : videoConfig.fps;
+             const safeBitrate = isMobile ? Math.min(videoConfig.bitrate, 8) : videoConfig.bitrate;
+             
+             if (isMobile && (videoConfig.fps > 30 || videoConfig.bitrate > 8)) {
+               console.warn(`[Mobile Optimization] Clamping export settings: FPS ${videoConfig.fps}->${safeFPS}, Bitrate ${videoConfig.bitrate}->${safeBitrate}Mbps to prevent crash.`);
+             }
+
              // --- Recording Start ---
-             const stream = canvas.captureStream(videoConfig.fps);
+             const stream = canvas.captureStream(safeFPS);
              if (stream.getTracks().length === 0 || !stream.active) {
                 console.error("Stream failed to initialize or has no tracks.");
-                // Emergency abort if stream fails (prevents infinite hang)
                 if (!hasCompletedRef.current) {
                      hasCompletedRef.current = true;
                      setIsPlaying(false);
@@ -440,7 +448,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     
              const options: MediaRecorderOptions = {
                mimeType: mimeType,
-               bitsPerSecond: videoConfig.bitrate * 1000000 
+               bitsPerSecond: safeBitrate * 1000000 
              };
     
              let recorder: MediaRecorder;
@@ -451,6 +459,11 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
                recorder = new MediaRecorder(stream);
              }
              
+             recorder.onerror = (e) => {
+                console.error("MediaRecorder Error:", e);
+                if (recorder.state !== 'inactive') recorder.stop();
+             };
+
              mediaRecorderRef.current = recorder;
     
              recorder.ondataavailable = (e) => {
@@ -486,7 +499,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         mediaRecorderRef.current.stop();
       }
     };
-  }, [isRecording, isImageLoaded, animationConfig.duration, videoConfig.bitrate, videoConfig.format, videoConfig.fps, onRecordingComplete]);
+  }, [isRecording, isImageLoaded, animationConfig.duration, videoConfig.bitrate, videoConfig.format, videoConfig.fps, onRecordingComplete, isMobile]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
