@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { ParticleConfig, AnimationConfig, VideoConfig, Particle, ExportFormat, BatchItem } from './types';
 import NebulaCanvas from './components/NebulaCanvas';
@@ -71,7 +70,8 @@ const App: React.FC = () => {
 
   // Handlers
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+    // Fix: Explicitly cast to File[] to avoid 'unknown' type errors
+    const files: File[] = e.target.files ? Array.from(e.target.files) : [];
     if (files.length === 0) return;
 
     // Limit based on device

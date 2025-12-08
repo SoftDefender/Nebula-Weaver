@@ -42,6 +42,9 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   const starSpriteRef = useRef<HTMLCanvasElement | null>(null);
   const spriteCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const hasCompletedRef = useRef(false); // Lock to prevent double-firing completion
+  
+  // Ref for recording progress to bypass React state updates during high-load encoding
+  const recordingProgressRef = useRef(0);
 
   const [isPlaying, setIsPlaying] = useState(true);
   const [playbackProgress, setPlaybackProgress] = useState(0); 
@@ -426,25 +429,33 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     const safeDt = Math.min(dt, 0.1);
 
     if (isPlaying && !isRecording) {
+      // Normal React state update for preview
       setPlaybackProgress(prev => {
         let next = prev + (safeDt / animationConfig.duration);
         if (next >= 1) next = 0; 
         return next;
       });
     } else if (isRecording) {
-       setPlaybackProgress(prev => {
-        const next = prev + (safeDt / animationConfig.duration);
-        if (next >= 1) return 1; 
-        return next;
-      });
+       // Direct Drive for Recording: Bypass React State to avoid frame drops on mobile
+       const duration = animationConfig.duration;
+       let next = recordingProgressRef.current + (safeDt / duration);
+       if (next > 1) next = 1;
+       
+       recordingProgressRef.current = next;
+       // Directly call drawFrame without triggering a re-render
+       drawFrame(next);
     }
 
     requestRef.current = requestAnimationFrame(animate);
-  }, [isPlaying, isRecording, animationConfig.duration]);
+  }, [isPlaying, isRecording, animationConfig.duration, drawFrame]);
 
   useEffect(() => {
-    drawFrame(playbackProgress);
-  }, [playbackProgress, drawFrame]);
+    // Only trigger drawing from playbackProgress change if NOT recording
+    // If recording, animate loop handles it directly
+    if (!isRecording) {
+       drawFrame(playbackProgress);
+    }
+  }, [playbackProgress, drawFrame, isRecording]);
 
   useEffect(() => {
     lastTimeRef.current = 0;
@@ -456,10 +467,11 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
   // Video Recording Logic
   useEffect(() => {
-    
     if (isRecording && isImageLoaded) {
       hasCompletedRef.current = false;
       setPlaybackProgress(0);
+      recordingProgressRef.current = 0; // Reset direct drive ref
+      
       setIsPlaying(true);
       lastTimeRef.current = 0;
       chunksRef.current = [];
@@ -545,7 +557,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
              };
     
              if (recorder.state === 'inactive') {
-                recorder.start();
+                // Timeslice 200ms to ensure chunks are flushed frequently on mobile
+                recorder.start(200);
              }
     
              const durationMs = animationConfig.duration * 1000;
@@ -562,7 +575,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         mediaRecorderRef.current.stop();
       }
     };
-  }, [isRecording, isImageLoaded, animationConfig.duration, videoConfig.bitrate, videoConfig.format, videoConfig.fps, onRecordingComplete, isMobile]);
+  }, [isRecording, isImageLoaded, animationConfig.duration, videoConfig.bitrate, videoConfig.format, videoConfig.fps, onRecordingComplete, isMobile, drawFrame]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
