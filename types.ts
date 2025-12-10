@@ -18,6 +18,7 @@ export interface ParticleConfig {
   spikeGain: number; // Star spike length/intensity
   spikeThreshold: number; // Minimum scale/brightness to show spikes
   spikeAngle: number; // Rotation in degrees
+  alpha?: number;
 }
 
 export interface AnimationConfig {
@@ -54,4 +55,27 @@ export interface Particle {
   scale: number; // Size variation factor
   alpha?: number; // Individual brightness/opacity variance
   color?: string; // Specific star color if detected
+}
+
+// --- Photo Framer Types ---
+
+export type FrameAspectRatio = 'original' | '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '1:2' | '2:1' | 'custom';
+
+export interface FrameConfig {
+  aspectRatio: FrameAspectRatio;
+  customWidth?: number;
+  customHeight?: number;
+  scale: number; // 0.1 to 1.0 (Controls margin)
+  shadowColor: 'black' | 'white';
+  shadowIntensity: number; // 0 to 100
+  blurIntensity: number; // 0 to 100
+  borderRadius: number; // 0 to 100 (relative to size)
+}
+
+export interface FramedImage {
+  id: string;
+  file: File;
+  previewUrl: string;
+  width: number;
+  height: number;
 }

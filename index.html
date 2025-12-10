@@ -4,22 +4,45 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Nebula Weaver</title>
+    
+    <!-- Google Fonts: Inter (Standard, Clean) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
         theme: {
           extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
             colors: {
-              space: {
-                900: '#0b0d17',
-                800: '#151932',
-                700: '#1e2445',
-                accent: '#6366f1',
-                highlight: '#a5b4fc'
+              sc: {
+                primary: '#40739e',   // Lighter Steel Blue (Was #2c3e50)
+                primaryHover: '#487eb0', // Hover state
+                dark: '#2f3640',     // Header/Footer (Softer Dark Blue-Grey)
+                gray: '#f4f6f8',     // Page Background (Cool Grey)
+                border: '#dce1e6',   // Subtle Borders
+                text: '#2f3640',     // Main Text
+                subtext: '#718093',  // Secondary Text
+                card: '#ffffff',     // Card Background
+                input: '#ffffff'     // Input Background
               }
             },
+            boxShadow: {
+              'sc': '0 1px 2px 0 rgba(44, 62, 80, 0.05)',
+              'sc-hover': '0 4px 12px rgba(44, 62, 80, 0.1)',
+            },
             animation: {
-              'spin-slow': 'spin 12s linear infinite',
+              'fade-in': 'fadeIn 0.3s ease-out',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              }
             }
           }
         }
@@ -27,30 +50,82 @@
     </script>
     <style>
       body {
-        background-color: #0b0d17;
-        color: #ffffff;
+        background-color: #f4f6f8;
+        color: #2f3640;
         font-family: 'Inter', sans-serif;
+        -webkit-font-smoothing: antialiased;
       }
       
       /* Accessibility Focus Indicator */
       :focus-visible {
-        outline: 2px solid #a5b4fc;
-        outline-offset: 2px;
+        outline: 2px solid #40739e;
+        outline-offset: 1px;
       }
 
       /* Custom Scrollbar */
       ::-webkit-scrollbar {
         width: 8px;
+        height: 8px;
       }
       ::-webkit-scrollbar-track {
-        background: #0b0d17; 
+        background: #f4f6f8; 
       }
       ::-webkit-scrollbar-thumb {
-        background: #1e2445; 
+        background: #bdc3c7; 
         border-radius: 4px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #6366f1; 
+        background: #95a5a6; 
+      }
+
+      /* --- Sliders (Thin, Ink Blue) --- */
+      input[type=range] {
+        -webkit-appearance: none; 
+        width: 100%; 
+        background: transparent; 
+        cursor: pointer;
+        height: 24px; /* Touch target */
+        margin: 0;
+      }
+      
+      /* Track */
+      input[type=range]::-webkit-slider-runnable-track {
+        width: 100%;
+        height: 2px; /* Very thin track */
+        background: #dce1e6; 
+        border: none;
+      }
+      
+      /* Thumb */
+      input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        height: 12px;
+        width: 12px;
+        border-radius: 50%; 
+        background: #40739e;
+        border: 2px solid #fff; 
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        margin-top: -5px; 
+        transition: transform 0.1s;
+      }
+
+      input[type=range]:hover::-webkit-slider-thumb {
+        transform: scale(1.2);
+        background: #487eb0;
+      }
+      
+      /* Firefox Support */
+      input[type=range]::-moz-range-track {
+        width: 100%;
+        height: 2px;
+        background: #dce1e6;
+      }
+      input[type=range]::-moz-range-thumb {
+        height: 12px;
+        width: 12px;
+        border: 2px solid #fff;
+        border-radius: 50%;
+        background: #40739e;
       }
     </style>
   <script type="importmap">
@@ -61,7 +136,7 @@
     "react/": "https://aistudiocdn.com/react@^19.2.1/",
     "react": "https://aistudiocdn.com/react@^19.2.1",
     "@heroicons/react/": "https://aistudiocdn.com/@heroicons/react@^2.2.0/",
-    "jszip": "https://aistudiocdn.com/jszip@^3.10.1"
+    "jszip": "https://esm.sh/jszip@^3.10.1"
   }
 }
 </script>

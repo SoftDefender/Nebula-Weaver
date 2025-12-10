@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { AnimationConfig, ParticleConfig, NebulaAnalysis, Particle, VideoConfig } from '../types';
 import { PlayIcon, PauseIcon, ArrowPathIcon } from '@heroicons/react/24/solid';
@@ -45,6 +44,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   
   // Ref for recording progress to bypass React state updates during high-load encoding
   const recordingProgressRef = useRef(0);
+  const drawingInProgressRef = useRef(false);
 
   const [isPlaying, setIsPlaying] = useState(true);
   const [playbackProgress, setPlaybackProgress] = useState(0); 
@@ -92,6 +92,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     
     let edgeStop = 1.0;
     if (feathering < 0) {
+      // Negative feathering tightens the gradient (Sharpening/Contraction)
+      // Map -3.0 to ~0.35 stop position
       const t = Math.abs(feathering) / 3.0; 
       edgeStop = 1.0 - (t * 0.65); 
     }
@@ -244,15 +246,24 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   };
 
   const drawFrame = useCallback((progress: number) => {
+    if (drawingInProgressRef.current) return;
+    drawingInProgressRef.current = true;
+
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d', { alpha: false }); 
-    if (!canvas || !ctx || !imageRef.current) return;
+    if (!canvas || !ctx || !imageRef.current) {
+        drawingInProgressRef.current = false;
+        return;
+    }
 
     const cW = canvas.width;
     const cH = canvas.height;
     
     // Safety check for empty canvas dimensions
-    if (cW === 0 || cH === 0) return;
+    if (cW === 0 || cH === 0) {
+        drawingInProgressRef.current = false;
+        return;
+    }
     
     const zOriginX = zoomOrigin.x * cW;
     const zOriginY = zoomOrigin.y * cH;
@@ -299,6 +310,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     if (feathering >= 0) {
       spriteScaleMultiplier = 1.0 + feathering;
     } else {
+      // Negative feathering: Don't shrink the sprite rect, just use the tighter gradient
       spriteScaleMultiplier = 1.0;
     }
 
@@ -407,7 +419,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
     if (!isRecording && imageBase64) {
       ctx.save();
-      ctx.strokeStyle = 'rgba(99, 102, 241, 0.5)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)'; // Brighter crosshair for contrast
       ctx.lineWidth = 2;
       ctx.beginPath();
       const chSize = 10;
@@ -418,6 +430,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       ctx.stroke();
       ctx.restore();
     }
+    
+    drawingInProgressRef.current = false;
 
   }, [animationConfig, particleConfig, activeParticles, isRecording, imageBase64, zoomOrigin]);
 
@@ -584,7 +598,7 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   };
 
   return (
-    <div className="relative w-full aspect-[4/3] rounded-lg overflow-hidden border border-space-700 bg-black shadow-2xl flex items-center justify-center group">
+    <div className="relative w-full h-full flex items-center justify-center group bg-black">
       <canvas
         ref={canvasRef}
         onClick={handleCanvasClick}
@@ -594,19 +608,19 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         style={{ width: '100%', height: '100%' }} 
       />
       {!imageBase64 && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-space-highlight bg-space-800/50 backdrop-blur-sm p-4 text-center">
-          <p className="text-base md:text-lg font-light">Upload a nebula image to begin</p>
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 bg-black/50 p-4 text-center">
+          <p className="text-sm font-medium">Upload a nebula image to begin</p>
         </div>
       )}
 
       {imageBase64 && !isRecording && (
-        <div className={`absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent transition-opacity duration-300 ${isPlaying ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
+        <div className={`absolute bottom-0 left-0 right-0 p-3 bg-white border-t border-sc-border transition-all duration-300 ${isPlaying ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
           <div className="flex items-center gap-3">
             <button 
               onClick={(e) => { e.stopPropagation(); setIsPlaying(!isPlaying); }}
-              className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white backdrop-blur-md transition-colors"
+              className="p-2 text-sc-primary hover:scale-110 transition-transform"
             >
-              {isPlaying ? <PauseIcon className="w-5 h-5" /> : <PlayIcon className="w-5 h-5" />}
+              {isPlaying ? <PauseIcon className="w-6 h-6" /> : <PlayIcon className="w-6 h-6" />}
             </button>
             
             <div className="flex-1 flex flex-col justify-end">
@@ -618,9 +632,9 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
                 value={playbackProgress}
                 onChange={handleSeek}
                 onClick={(e) => e.stopPropagation()} 
-                className="w-full accent-space-accent h-1 bg-white/20 rounded-lg appearance-none cursor-pointer touch-none"
+                className="w-full cursor-pointer touch-none"
               />
-               <div className="flex justify-between text-[10px] text-gray-300 mt-1 font-mono">
+               <div className="flex justify-between text-[10px] text-sc-subtext mt-1 font-medium">
                   <span>{(playbackProgress * animationConfig.duration).toFixed(1)}s</span>
                   <span>{animationConfig.duration}s</span>
                </div>
@@ -628,13 +642,12 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
 
             <button 
               onClick={(e) => { e.stopPropagation(); setPlaybackProgress(0); setIsPlaying(true); }}
-              className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white backdrop-blur-md transition-colors"
+              className="p-2 text-sc-subtext hover:text-sc-primary transition-colors"
               title="Restart"
             >
               <ArrowPathIcon className="w-4 h-4" />
             </button>
           </div>
-          <div className="text-[10px] text-center text-gray-500 mt-2">Click anywhere on image to set Zoom Center</div>
         </div>
       )}
     </div>
