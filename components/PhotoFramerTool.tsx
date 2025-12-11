@@ -1,13 +1,19 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { FrameConfig, FrameAspectRatio, FramedImage } from '../types';
+
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { FrameConfig, FrameAspectRatio, FramedImage, ImageEditConfig, RenderRequest } from '../types';
+import { renderFrame } from '../services/framerWorker'; // Now acts as a service
+import JSZip from 'jszip';
 import { 
   PhotoIcon, 
   ArrowDownTrayIcon, 
   ChevronLeftIcon, 
   ChevronRightIcon, 
   TrashIcon,
-  HomeIcon,
-  SparklesIcon
+  AdjustmentsHorizontalIcon,
+  ArrowsRightLeftIcon,
+  ArrowPathIcon,
+  XCircleIcon,
+  Square2StackIcon
 } from '@heroicons/react/24/solid';
 
 interface PhotoFramerToolProps {
@@ -17,21 +23,98 @@ interface PhotoFramerToolProps {
 const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
   const [images, setImages] = useState<FramedImage[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [isExporting, setIsExporting] = useState(false);
   
-  // Configuration State
+  // Progress State
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
+  const [shouldZip, setShouldZip] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const [settingsTab, setSettingsTab] = useState<'frame' | 'image'>('frame');
+  
+  // Configuration
   const [config, setConfig] = useState<FrameConfig>({
     aspectRatio: 'original',
-    scale: 0.85, // Default margin
+    scale: 0.85,
     shadowColor: 'black',
     shadowIntensity: 40,
-    blurIntensity: 40,
-    borderRadius: 20
+    blurIntensity: 20,
+    borderRadius: 7
   });
+  
+  const [debouncedConfig, setDebouncedConfig] = useState(config);
 
+  // Debounce Config
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedConfig(config), 150);
+    return () => clearTimeout(handler);
+  }, [config]);
+
+  // Initial Edit State
+  const defaultEditConfig: ImageEditConfig = {
+    rotation: 0,
+    flipH: false,
+    flipV: false,
+    zoom: 1.0,
+    panX: 0,
+    panY: 0
+  };
+
+  // Preview Logic (Canvas)
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const previewBlobUrlRef = useRef<string | null>(null);
 
-  // Handle Upload
+  // Generate Preview via Async Service
+  useEffect(() => {
+      if (images.length === 0) return;
+      const activeImg = images[activeIndex];
+      let isActive = true;
+      
+      const updatePreview = async () => {
+          // Use Image object for standard service
+          const img = new Image();
+          img.src = activeImg.previewUrl;
+          await new Promise((r) => { img.onload = r; });
+
+          if (!isActive) return;
+
+          const req: RenderRequest = {
+              id: `preview-${Date.now()}`,
+              imageBitmap: img, 
+              frameConfig: debouncedConfig,
+              editConfig: activeImg.editConfig,
+              quality: 'preview' // Low res for fast UI
+          };
+
+          try {
+              const blob = await renderFrame(req);
+              if (blob && isActive) {
+                  if (previewBlobUrlRef.current) URL.revokeObjectURL(previewBlobUrlRef.current);
+                  const url = URL.createObjectURL(blob);
+                  previewBlobUrlRef.current = url;
+                  
+                  // Draw to visible canvas
+                  const canvas = canvasRef.current;
+                  const ctx = canvas?.getContext('2d');
+                  const pImg = new Image();
+                  pImg.onload = () => {
+                      if (canvas && ctx && isActive) {
+                          canvas.width = pImg.width;
+                          canvas.height = pImg.height;
+                          ctx.drawImage(pImg, 0, 0);
+                      }
+                  };
+                  pImg.src = url;
+              }
+          } catch (e) {
+              console.error("Preview render failed", e);
+          }
+      };
+      
+      updatePreview();
+      return () => { isActive = false; };
+  }, [activeIndex, debouncedConfig, images]); // Deep compare handled by useEffect logic generally
+
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const newImages: FramedImage[] = Array.from(e.target.files).map((file: File) => ({
@@ -39,23 +122,24 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
         file,
         previewUrl: URL.createObjectURL(file),
         width: 0, 
-        height: 0
+        height: 0,
+        editConfig: { ...defaultEditConfig },
+        status: 'pending'
       }));
       
-      // Load dimensions for high quality render
+      // Load dimensions asynchronously without blocking
       newImages.forEach(img => {
         const i = new Image();
         i.src = img.previewUrl;
         i.onload = () => {
-           img.width = i.naturalWidth;
-           img.height = i.naturalHeight;
-           // Trigger re-render to ensure dimensions are caught
-           setImages(prev => [...prev]);
+           setImages(prev => prev.map(p => p.id === img.id ? { ...p, width: i.naturalWidth, height: i.naturalHeight } : p));
         };
       });
 
       setImages(prev => [...prev, ...newImages]);
     }
+    // Reset input
+    e.target.value = '';
   };
 
   const removeImage = (index: number, e: React.MouseEvent) => {
@@ -67,213 +151,110 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
     if (activeIndex >= newImages.length) setActiveIndex(Math.max(0, newImages.length - 1));
   };
 
-  // The Rendering Engine
-  const drawCanvas = useCallback((ctx: CanvasRenderingContext2D, imgObj: FramedImage, renderConfig: FrameConfig) => {
-    const img = new Image();
-    img.src = imgObj.previewUrl;
-    
-    // We need synchronous drawing for export, but for preview we rely on browser cache usually loading fast.
-    // However, ensure image is loaded before drawing.
-    if (!img.complete) return;
-
-    const naturalW = imgObj.width || img.naturalWidth;
-    const naturalH = imgObj.height || img.naturalHeight;
-    
-    if (naturalW === 0 || naturalH === 0) return;
-
-    // 1. Determine Canvas Size
-    let cw = naturalW;
-    let ch = naturalH;
-
-    if (renderConfig.aspectRatio === 'custom') {
-       if (renderConfig.customWidth && renderConfig.customHeight) {
-          // If user provides specific pixels (not just ratio)
-          // We ideally want to maintain the image's quality.
-          // Let's treat custom W/H as a ratio target, but scale up to match image resolution.
-          const targetW = renderConfig.customWidth;
-          const targetH = renderConfig.customHeight;
-          const targetRatio = targetW / targetH;
-          const imgRatio = naturalW / naturalH;
-          
-          if (imgRatio > targetRatio) {
-             cw = naturalW;
-             ch = cw / targetRatio;
-          } else {
-             ch = naturalH;
-             cw = ch * targetRatio;
+  const updateActiveImageEdit = (updates: Partial<ImageEditConfig>) => {
+      setImages(prev => {
+          const copy = [...prev];
+          if (copy[activeIndex]) {
+              copy[activeIndex] = {
+                  ...copy[activeIndex],
+                  editConfig: { ...copy[activeIndex].editConfig, ...updates }
+              };
           }
-       }
-    } else if (renderConfig.aspectRatio !== 'original') {
-        const [rw, rh] = renderConfig.aspectRatio.split(':').map(Number);
-        const targetRatio = rw / rh;
-        const imgRatio = naturalW / naturalH;
-
-        if (imgRatio > targetRatio) {
-           cw = naturalW;
-           ch = cw / targetRatio;
-        } else {
-           ch = naturalH;
-           cw = ch * targetRatio;
-        }
-    }
-
-    ctx.canvas.width = cw;
-    ctx.canvas.height = ch;
-
-    // 2. Draw Background (Cover + Frost)
-    ctx.save();
-    
-    // Fill Background Logic
-    const canvasRatio = cw / ch;
-    const imgRatio = naturalW / naturalH;
-    
-    let bgW, bgH, bgX, bgY;
-    if (canvasRatio > imgRatio) {
-        bgW = cw;
-        bgH = cw / imgRatio;
-        bgX = 0;
-        bgY = (ch - bgH) / 2;
-    } else {
-        bgH = ch;
-        bgW = ch * imgRatio;
-        bgY = 0;
-        bgX = (cw - bgW) / 2;
-    }
-    
-    const refSize = 1000;
-    const resScale = Math.max(cw, ch) / refSize;
-    
-    // Frosted Glass Effect: Blur + Saturation
-    ctx.filter = `blur(${renderConfig.blurIntensity * resScale}px) saturate(160%) brightness(1.1)`;
-    // Scale slightly to hide blur edges
-    ctx.drawImage(img, bgX - (bgW*0.05), bgY - (bgH*0.05), bgW * 1.1, bgH * 1.1);
-    ctx.filter = 'none';
-
-    // White Overlay for that "Milky Glass" feel
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-    ctx.fillRect(0, 0, cw, ch);
-    ctx.restore();
-
-    // 3. Draw Overlay/Shadow Base
-    ctx.fillStyle = renderConfig.shadowColor === 'black' ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.2)';
-    ctx.fillRect(0,0,cw,ch);
-
-    // 4. Draw Foreground (Scaled, Shadow, Radius)
-    const marginScale = renderConfig.scale; 
-    
-    // Fit Logic (Contain)
-    let fgW, fgH;
-    if (canvasRatio > imgRatio) {
-        fgH = ch * marginScale;
-        fgW = fgH * imgRatio;
-    } else {
-        fgW = cw * marginScale;
-        fgH = fgW / imgRatio;
-    }
-    
-    const fgX = (cw - fgW) / 2;
-    const fgY = (ch - fgH) / 2;
-
-    // Shadow
-    ctx.save();
-    // Tight Shadow: Close offset, high opacity, small blur
-    const shadowOpacity = renderConfig.shadowColor === 'black' ? 0.5 : 0.8;
-    ctx.shadowColor = renderConfig.shadowColor === 'black' 
-        ? `rgba(0,0,0,${shadowOpacity})` 
-        : `rgba(255,255,255,${shadowOpacity})`;
-    
-    // Use smaller multiplier for tighter shadow
-    ctx.shadowBlur = renderConfig.shadowIntensity * 0.5 * resScale; 
-    ctx.shadowOffsetY = renderConfig.shadowIntensity * 0.15 * resScale;
-    ctx.shadowOffsetX = 0;
-    
-    // Rounded Clip Path
-    const radius = (Math.min(fgW, fgH) * (renderConfig.borderRadius / 100)) / 2;
-    
-    ctx.beginPath();
-    ctx.moveTo(fgX + radius, fgY);
-    ctx.lineTo(fgX + fgW - radius, fgY);
-    ctx.quadraticCurveTo(fgX + fgW, fgY, fgX + fgW, fgY + radius);
-    ctx.lineTo(fgX + fgW, fgY + fgH - radius);
-    ctx.quadraticCurveTo(fgX + fgW, fgY + fgH, fgX + fgW - radius, fgY + fgH);
-    ctx.lineTo(fgX + radius, fgY + fgH);
-    ctx.quadraticCurveTo(fgX, fgY + fgH, fgX, fgY + fgH - radius);
-    ctx.lineTo(fgX, fgY + radius);
-    ctx.quadraticCurveTo(fgX, fgY, fgX + radius, fgY);
-    ctx.closePath();
-    
-    // Fill to cast shadow
-    ctx.fillStyle = '#000000'; 
-    ctx.fill();
-    
-    // Clip and Draw Image
-    ctx.shadowColor = 'transparent'; 
-    ctx.clip();
-    ctx.drawImage(img, fgX, fgY, fgW, fgH);
-    ctx.restore();
-
-  }, []);
-
-  // Live Preview Effect
-  useEffect(() => {
-    if (images.length === 0 || !canvasRef.current) return;
-    const activeImg = images[activeIndex];
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    
-    if (ctx) {
-       const img = new Image();
-       img.src = activeImg.previewUrl;
-       img.onload = () => {
-           drawCanvas(ctx, activeImg, config);
-       };
-    }
-  }, [images, activeIndex, config, drawCanvas]);
-
-  const handleExportAll = async () => {
-     if (images.length === 0) return;
-     setIsExporting(true);
-     
-     for (let i = 0; i < images.length; i++) {
-        const imgObj = images[i];
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) continue;
-        
-        if (imgObj.width === 0) {
-           await new Promise<void>((resolve) => {
-               const tmp = new Image();
-               tmp.src = imgObj.previewUrl;
-               tmp.onload = () => {
-                   imgObj.width = tmp.naturalWidth;
-                   imgObj.height = tmp.naturalHeight;
-                   resolve();
-               }
-           });
-        }
-        
-        drawCanvas(ctx, imgObj, config);
-        
-        await new Promise<void>((resolve) => {
-            canvas.toBlob((blob) => {
-                if (blob) {
-                    const url = URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.href = url;
-                    const originalName = imgObj.file.name.replace(/\.[^/.]+$/, "");
-                    link.download = `${originalName}_framed.jpg`;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                    URL.revokeObjectURL(url);
-                }
-                resolve();
-            }, 'image/jpeg', 0.95);
-        });
-     }
-     
-     setIsExporting(false);
+          return copy;
+      });
   };
+
+  // --- Export Logic ---
+  
+  const handleExport = async () => {
+      if (images.length === 0 || isExporting) return;
+      
+      setIsExporting(true);
+      setExportProgress({ current: 0, total: images.length });
+      abortControllerRef.current = new AbortController();
+      const signal = abortControllerRef.current.signal;
+      
+      const zip = shouldZip ? new JSZip() : null;
+      
+      try {
+          for (let i = 0; i < images.length; i++) {
+              if (signal.aborted) throw new Error("Cancelled");
+              
+              const imgObj = images[i];
+              
+              // 1. Get Image
+              const img = new Image();
+              img.src = imgObj.previewUrl;
+              await new Promise((r) => { img.onload = r; });
+              
+              // 2. Request Service Render
+              // Yield to main thread briefly to allow UI update
+              await new Promise(r => setTimeout(r, 0));
+
+              const req: RenderRequest = {
+                  id: `export-${imgObj.id}`,
+                  imageBitmap: img,
+                  frameConfig: config,
+                  editConfig: imgObj.editConfig,
+                  quality: 'full'
+              };
+              
+              const blob = await renderFrame(req);
+
+              if (blob) {
+                  const originalName = imgObj.file.name.replace(/\.[^/.]+$/, "");
+                  const fileName = `${originalName}_framed.jpg`;
+
+                  if (zip) {
+                      zip.file(fileName, blob);
+                  } else {
+                      // Direct Download
+                      const url = URL.createObjectURL(blob);
+                      const link = document.createElement('a');
+                      link.href = url;
+                      link.download = fileName;
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                      URL.revokeObjectURL(url);
+                      // Slight delay to prevent browser choking on multiple downloads
+                      await new Promise(r => setTimeout(r, 200));
+                  }
+              }
+              
+              setExportProgress({ current: i + 1, total: images.length });
+          }
+          
+          if (zip && !signal.aborted) {
+              const content = await zip.generateAsync({ type: "blob" });
+              const url = URL.createObjectURL(content);
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = `framed_photos_batch_${Date.now()}.zip`;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(url);
+          }
+
+      } catch (err: any) {
+          if (err.message !== "Cancelled") {
+              console.error("Export failed:", err);
+              alert("Export encountered an error. Check console.");
+          }
+      } finally {
+          setIsExporting(false);
+          abortControllerRef.current = null;
+      }
+  };
+
+  const handleCancel = () => {
+      if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+      }
+  };
+  
+  const currentEdit = images[activeIndex]?.editConfig || defaultEditConfig;
 
   return (
     <div className="min-h-screen font-sans bg-sc-gray pb-20">
@@ -296,8 +277,8 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
         
         {/* Left: Sources */}
         <section className="lg:col-span-3 space-y-4">
-            <div className="bg-sc-card border border-sc-border rounded-sm p-5 shadow-sc">
-                <h2 className="text-xs font-bold uppercase text-sc-subtext mb-4 border-b border-sc-border pb-2">Photos</h2>
+            <div className="bg-sc-card border border-sc-border rounded-sm p-5 shadow-sc flex flex-col h-[80vh] lg:h-auto">
+                <h2 className="text-xs font-bold uppercase text-sc-subtext mb-4 border-b border-sc-border pb-2">Photos ({images.length})</h2>
                 
                 <input 
                   type="file" 
@@ -309,31 +290,38 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
                 />
                 <label 
                   htmlFor="photo-upload"
-                  className="block w-full py-2 px-4 text-sm font-bold text-center border rounded-[3px] cursor-pointer bg-sc-primary text-white hover:bg-sc-primaryHover transition-colors"
+                  className={`block w-full py-2 px-4 text-sm font-bold text-center border rounded-[3px] cursor-pointer transition-colors mb-4 ${isExporting ? 'bg-gray-300 cursor-not-allowed text-gray-500' : 'bg-sc-primary text-white hover:bg-sc-primaryHover'}`}
                 >
-                  Upload Photos
+                  {isExporting ? 'Processing...' : 'Upload Photos'}
                 </label>
 
-                {images.length > 0 && (
-                    <div className="mt-4 max-h-[60vh] overflow-y-auto space-y-2">
-                        {images.map((img, idx) => (
-                            <div 
-                                key={img.id}
-                                onClick={() => setActiveIndex(idx)}
-                                className={`flex items-center gap-3 p-2 rounded-[3px] cursor-pointer border ${idx === activeIndex ? 'bg-blue-50 border-sc-primary' : 'bg-white border-transparent hover:bg-gray-50'}`}
-                            >
-                                <img src={img.previewUrl} className="w-10 h-10 object-cover rounded-[2px] bg-gray-200" alt="" />
-                                <div className="flex-1 min-w-0">
-                                    <div className={`text-xs truncate ${idx === activeIndex ? 'font-bold text-sc-primary' : 'text-sc-text'}`}>{img.file.name}</div>
-                                    <div className="text-[10px] text-sc-subtext">{img.width > 0 ? `${img.width}x${img.height}` : 'Loading...'}</div>
+                {/* Photo List - Standard Scroll */}
+                <div className="flex-1 lg:flex-none lg:max-h-[600px] overflow-y-auto relative pr-1 custom-scrollbar" style={{ minHeight: '300px' }}>
+                     {images.length > 0 ? (
+                         <div className="flex flex-col gap-1">
+                             {images.map((img, idx) => (
+                                <div 
+                                    key={img.id}
+                                    onClick={() => !isExporting && setActiveIndex(idx)}
+                                    className={`w-full flex items-center gap-3 p-2 rounded-[3px] cursor-pointer border transition-colors ${idx === activeIndex ? 'bg-blue-50 border-sc-primary' : 'bg-white border-transparent hover:bg-gray-50'}`}
+                                >
+                                    <img src={img.previewUrl} className="w-10 h-10 object-cover rounded-[2px] bg-gray-200" alt="" />
+                                    <div className="flex-1 min-w-0">
+                                        <div className={`text-xs truncate ${idx === activeIndex ? 'font-bold text-sc-primary' : 'text-sc-text'}`}>{img.file.name}</div>
+                                        <div className="text-[10px] text-sc-subtext">{img.width > 0 ? `${img.width}x${img.height}` : 'Loading...'}</div>
+                                    </div>
+                                    <button onClick={(e) => !isExporting && removeImage(idx, e)} className="text-gray-300 hover:text-red-500 disabled:opacity-0" disabled={isExporting}>
+                                        <TrashIcon className="w-4 h-4" />
+                                    </button>
                                 </div>
-                                <button onClick={(e) => removeImage(idx, e)} className="text-gray-300 hover:text-red-500">
-                                    <TrashIcon className="w-4 h-4" />
-                                </button>
-                            </div>
-                        ))}
-                    </div>
-                )}
+                             ))}
+                         </div>
+                     ) : (
+                        <div className="flex items-center justify-center h-full text-sc-subtext text-xs italic">
+                            No photos added
+                        </div>
+                     )}
+                </div>
             </div>
         </section>
 
@@ -344,41 +332,73 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
                      {images.length > 0 ? (
                         <canvas 
                             ref={canvasRef}
-                            className="max-w-full max-h-full object-contain shadow-lg"
+                            className="max-w-full max-h-full object-contain shadow-lg transition-opacity duration-300"
                         />
                      ) : (
                         <div className="text-sc-subtext text-sm font-medium">Upload photos to begin</div>
                      )}
+                     
+                     {/* Export Progress Overlay */}
+                     {isExporting && (
+                         <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-50 text-white animate-fade-in">
+                             <ArrowPathIcon className="w-10 h-10 animate-spin mb-4 text-sc-primary" />
+                             <div className="text-xl font-bold mb-2">Processing...</div>
+                             <div className="text-sm font-mono mb-6">{exportProgress.current} / {exportProgress.total}</div>
+                             <div className="w-64 h-2 bg-gray-700 rounded-full mb-6 overflow-hidden">
+                                 <div 
+                                    className="h-full bg-sc-primary transition-all duration-300 ease-out"
+                                    style={{ width: `${(exportProgress.current / exportProgress.total) * 100}%` }}
+                                 ></div>
+                             </div>
+                             <button 
+                                onClick={handleCancel}
+                                className="px-6 py-2 border border-red-500 text-red-400 hover:bg-red-500/10 rounded-[3px] text-xs font-bold flex items-center gap-2 transition-colors"
+                             >
+                                <XCircleIcon className="w-4 h-4" /> Cancel
+                             </button>
+                         </div>
+                     )}
                  </div>
 
                  {/* Navigation Overlay */}
-                 {images.length > 1 && (
+                 {images.length > 1 && !isExporting && (
                      <>
                         <button 
                             onClick={() => setActiveIndex(Math.max(0, activeIndex - 1))} 
                             disabled={activeIndex === 0}
-                            className="absolute left-2 top-1/2 -translate-y-1/2 p-2 bg-black/50 text-white hover:bg-sc-primary rounded-[2px] disabled:opacity-0"
+                            className="absolute left-2 top-1/2 -translate-y-1/2 p-2 bg-black/50 text-white hover:bg-sc-primary rounded-[2px] disabled:opacity-0 transition-all"
                         >
                             <ChevronLeftIcon className="w-6 h-6" />
                         </button>
                         <button 
                             onClick={() => setActiveIndex(Math.min(images.length - 1, activeIndex + 1))}
                             disabled={activeIndex === images.length - 1}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-black/50 text-white hover:bg-sc-primary rounded-[2px] disabled:opacity-0"
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-black/50 text-white hover:bg-sc-primary rounded-[2px] disabled:opacity-0 transition-all"
                         >
                             <ChevronRightIcon className="w-6 h-6" />
                         </button>
                      </>
                  )}
 
-                 <div className="p-4 bg-white border-t border-sc-border">
+                 <div className="p-4 bg-white border-t border-sc-border flex flex-col gap-3">
+                     <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-2 cursor-pointer group">
+                             <div className={`w-4 h-4 border rounded-[2px] flex items-center justify-center transition-colors ${shouldZip ? 'bg-sc-primary border-sc-primary' : 'border-gray-300 bg-white'}`}>
+                                 {shouldZip && <div className="w-2 h-2 bg-white rounded-[1px]"></div>}
+                             </div>
+                             <input type="checkbox" checked={shouldZip} onChange={() => setShouldZip(!shouldZip)} className="hidden" />
+                             <span className="text-xs font-bold text-sc-text group-hover:text-sc-primary">Export as ZIP Archive</span>
+                        </label>
+                        <span className="text-[10px] text-sc-subtext">Quality: 100% (Match Source)</span>
+                     </div>
+                     
                      <button 
-                        onClick={handleExportAll}
+                        onClick={handleExport}
                         disabled={images.length === 0 || isExporting}
-                        className="w-full py-3 bg-sc-dark text-white font-bold text-sm rounded-[3px] hover:bg-gray-800 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors"
+                        className={`w-full py-3 font-bold text-sm rounded-[3px] flex items-center justify-center gap-2 transition-all ${isExporting ? 'bg-gray-100 text-gray-400' : 'bg-sc-dark text-white hover:bg-gray-800 shadow-md'}`}
                      >
-                        {isExporting ? <ArrowDownTrayIcon className="w-4 h-4 animate-bounce" /> : <ArrowDownTrayIcon className="w-4 h-4" />}
-                        {isExporting ? 'Processing...' : `Download All (${images.length})`}
+                        <ArrowDownTrayIcon className="w-4 h-4" />
+                        {isExporting ? 'Exporting...' : `Download All (${images.length})`}
                      </button>
                  </div>
              </div>
@@ -387,9 +407,27 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
         {/* Right: Settings */}
         <section className="lg:col-span-3 space-y-4">
             <div className="bg-sc-card border border-sc-border rounded-[3px] p-5 shadow-sc">
-                <h2 className="text-xs font-bold uppercase text-sc-subtext mb-5 border-b border-sc-border pb-2">Frame Settings</h2>
                 
-                <div className="space-y-6">
+                {/* Tabs */}
+                <div className="flex border-b border-sc-border mb-5">
+                    <button 
+                        onClick={() => setSettingsTab('frame')}
+                        className={`flex-1 pb-2 text-xs font-bold uppercase transition-colors ${settingsTab === 'frame' ? 'text-sc-primary border-b-2 border-sc-primary' : 'text-sc-subtext hover:text-sc-text'}`}
+                        disabled={isExporting}
+                    >
+                        Frame
+                    </button>
+                    <button 
+                        onClick={() => setSettingsTab('image')}
+                        className={`flex-1 pb-2 text-xs font-bold uppercase transition-colors ${settingsTab === 'image' ? 'text-sc-primary border-b-2 border-sc-primary' : 'text-sc-subtext hover:text-sc-text'}`}
+                        disabled={images.length === 0 || isExporting}
+                    >
+                        Image Edit
+                    </button>
+                </div>
+                
+                {settingsTab === 'frame' ? (
+                <div className={`space-y-6 animate-fade-in ${isExporting ? 'opacity-50 pointer-events-none' : ''}`}>
                     {/* Ratio */}
                     <div className="space-y-2">
                         <label className="text-[11px] font-bold text-sc-text block">Canvas Ratio</label>
@@ -439,7 +477,7 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
                     {/* Blur */}
                     <div>
                         <div className="flex justify-between text-[10px] mb-1 text-sc-subtext"><span>Frosted Blur</span><span>{config.blurIntensity}</span></div>
-                        <input type="range" min="0" max="30" step="1" value={config.blurIntensity} onChange={(e) => setConfig({...config, blurIntensity: parseFloat(e.target.value)})} />
+                        <input type="range" min="0" max="100" step="1" value={config.blurIntensity} onChange={(e) => setConfig({...config, blurIntensity: parseFloat(e.target.value)})} />
                     </div>
 
                     {/* Radius */}
@@ -464,6 +502,87 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
                     </div>
 
                 </div>
+                ) : (
+                <div className={`space-y-6 animate-fade-in ${isExporting ? 'opacity-50 pointer-events-none' : ''}`}>
+                    <div className="text-[10px] text-sc-subtext bg-blue-50 text-sc-primary p-2 rounded-[3px] border border-blue-100">
+                        Edits apply only to the selected image.
+                    </div>
+                    
+                    {/* Rotate & Flip */}
+                    <div className="space-y-2">
+                        <label className="text-[11px] font-bold text-sc-text block">Transform</label>
+                        <div className="grid grid-cols-2 gap-2">
+                             <button 
+                                onClick={() => updateActiveImageEdit({ rotation: (currentEdit.rotation + 90) % 360 })}
+                                className="flex items-center justify-center gap-2 py-2 bg-white border border-sc-border hover:border-sc-primary text-xs font-medium rounded-[3px]"
+                             >
+                                <ArrowPathIcon className="w-3 h-3" /> Rotate 90°
+                             </button>
+                             <div className="flex gap-2">
+                                <button 
+                                    onClick={() => updateActiveImageEdit({ flipH: !currentEdit.flipH })}
+                                    className={`flex-1 flex items-center justify-center border rounded-[3px] ${currentEdit.flipH ? 'bg-sc-primary text-white border-sc-primary' : 'bg-white border-sc-border text-sc-text hover:border-sc-primary'}`}
+                                    title="Flip Horizontal"
+                                >
+                                    <ArrowsRightLeftIcon className="w-3 h-3" />
+                                </button>
+                                <button 
+                                    onClick={() => updateActiveImageEdit({ flipV: !currentEdit.flipV })}
+                                    className={`flex-1 flex items-center justify-center border rounded-[3px] ${currentEdit.flipV ? 'bg-sc-primary text-white border-sc-primary' : 'bg-white border-sc-border text-sc-text hover:border-sc-primary'}`}
+                                    title="Flip Vertical"
+                                >
+                                    <ArrowsRightLeftIcon className="w-3 h-3 rotate-90" />
+                                </button>
+                             </div>
+                        </div>
+                    </div>
+                    
+                    <div className="h-px bg-sc-border"></div>
+                    
+                    {/* Crop / Zoom */}
+                    <div className="space-y-4">
+                        <label className="text-[11px] font-bold text-sc-text block">Crop & Pan</label>
+                        
+                        <div>
+                            <div className="flex justify-between text-[10px] mb-1 text-sc-subtext"><span>Zoom</span><span>{currentEdit.zoom.toFixed(2)}x</span></div>
+                            <input 
+                                type="range" min="1.0" max="3.0" step="0.05" 
+                                value={currentEdit.zoom} 
+                                onChange={(e) => updateActiveImageEdit({ zoom: parseFloat(e.target.value) })} 
+                            />
+                        </div>
+
+                        <div>
+                            <div className="flex justify-between text-[10px] mb-1 text-sc-subtext"><span>Pan X</span><span>{currentEdit.panX.toFixed(0)}</span></div>
+                            <input 
+                                type="range" min="-100" max="100" step="1" 
+                                value={currentEdit.panX} 
+                                onChange={(e) => updateActiveImageEdit({ panX: parseFloat(e.target.value) })} 
+                                disabled={currentEdit.zoom === 1}
+                                className={currentEdit.zoom === 1 ? 'opacity-50 cursor-not-allowed' : ''}
+                            />
+                        </div>
+
+                        <div>
+                            <div className="flex justify-between text-[10px] mb-1 text-sc-subtext"><span>Pan Y</span><span>{currentEdit.panY.toFixed(0)}</span></div>
+                            <input 
+                                type="range" min="-100" max="100" step="1" 
+                                value={currentEdit.panY} 
+                                onChange={(e) => updateActiveImageEdit({ panY: parseFloat(e.target.value) })} 
+                                disabled={currentEdit.zoom === 1}
+                                className={currentEdit.zoom === 1 ? 'opacity-50 cursor-not-allowed' : ''}
+                            />
+                        </div>
+                        
+                        <button 
+                             onClick={() => updateActiveImageEdit(defaultEditConfig)}
+                             className="w-full py-1 text-[10px] text-sc-subtext hover:text-sc-primary border border-transparent hover:border-sc-border rounded-[2px]"
+                        >
+                            Reset Image
+                        </button>
+                    </div>
+                </div>
+                )}
             </div>
         </section>
 

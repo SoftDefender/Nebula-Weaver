@@ -27,7 +27,6 @@ export interface AnimationConfig {
   rotationDirection: 'cw' | 'ccw'; // clockwise, counter-clockwise
   rotationSpeed: number;
   duration: number; // in seconds
-  // zoomOrigin removed from global config, now handled per BatchItem
 }
 
 export interface NebulaAnalysis {
@@ -72,10 +71,35 @@ export interface FrameConfig {
   borderRadius: number; // 0 to 100 (relative to size)
 }
 
+export interface ImageEditConfig {
+  rotation: number; // 0, 90, 180, 270
+  flipH: boolean;
+  flipV: boolean;
+  zoom: number; // 1.0 to 3.0 (Crop Scale)
+  panX: number; // -100 to 100 (Percentage offset)
+  panY: number; // -100 to 100
+}
+
 export interface FramedImage {
   id: string;
   file: File;
-  previewUrl: string;
+  previewUrl: string; // Blob URL for thumbnail/preview
   width: number;
   height: number;
+  editConfig: ImageEditConfig;
+  status?: 'pending' | 'processing' | 'done' | 'error';
+}
+
+export interface RenderRequest {
+  id: string;
+  imageBitmap: ImageBitmap | HTMLImageElement; // Support both for main thread fallback
+  frameConfig: FrameConfig;
+  editConfig: ImageEditConfig;
+  quality: 'preview' | 'full'; 
+}
+
+export interface RenderResponse {
+  id: string;
+  blob: Blob | null;
+  error?: string;
 }
