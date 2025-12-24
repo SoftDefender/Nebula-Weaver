@@ -27,7 +27,9 @@ import {
   ArrowsPointingOutIcon,
   CpuChipIcon,
   TagIcon,
-  InformationCircleIcon
+  InformationCircleIcon,
+  Bars3Icon,
+  XMarkIcon
 } from '@heroicons/react/24/solid';
 
 // --- Sub-Page: The Nebula Weaver Tool ---
@@ -45,6 +47,17 @@ const NebulaTool: React.FC<NebulaToolProps> = ({ onBack }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [previewTrigger, setPreviewTrigger] = useState(0);
   
+  // Mobile UI States
+  const [showLeftSidebar, setShowLeftSidebar] = useState(false);
+  const [showRightSidebar, setShowRightSidebar] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 1024);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   const [particleConfig, setParticleConfig] = useState<ParticleConfig>({
     density: 200,
     baseSize: 1.2,
@@ -97,6 +110,7 @@ const NebulaTool: React.FC<NebulaToolProps> = ({ onBack }) => {
 
     setBatchItems(prev => [...prev, ...newItems]);
     if (batchItems.length === 0) setActiveIndex(0);
+    if (isMobile) setShowLeftSidebar(false);
   };
 
   const handleBatchAnalysis = async () => {
@@ -144,23 +158,44 @@ const NebulaTool: React.FC<NebulaToolProps> = ({ onBack }) => {
   };
 
   return (
-    <div className="h-screen bg-rv-bg flex flex-col font-sans">
-      <header className="h-12 bg-rv-panel border-b border-rv-border flex items-center justify-between px-4 shrink-0">
-        <div className="flex items-center gap-4">
+    <div className="h-screen bg-rv-bg flex flex-col font-sans overflow-hidden">
+      <header className="h-12 bg-rv-panel border-b border-rv-border flex items-center justify-between px-4 shrink-0 z-50">
+        <div className="flex items-center gap-3">
+           <button 
+             onClick={() => setShowLeftSidebar(!showLeftSidebar)}
+             className="lg:hidden p-1.5 text-rv-subtext hover:text-white bg-rv-surface rounded-sm border border-rv-border"
+           >
+             <Bars3Icon className="w-5 h-5" />
+           </button>
            <div onClick={onBack} className="flex items-center gap-2 cursor-pointer group">
               <div className="bg-rv-accent p-1.5 rounded-sm group-hover:bg-rv-accentHover transition-colors">
                 <SparklesIcon className="w-4 h-4 text-white" />
               </div>
-              <span className="text-sm font-bold tracking-tight text-rv-text">NEBULA<span className="font-light text-rv-subtext">WEAVER</span></span>
+              <span className="text-sm font-bold tracking-tight text-rv-text">NEBULA<span className="font-light text-rv-subtext hidden sm:inline">WEAVER</span></span>
            </div>
         </div>
-        <div className="text-[10px] font-mono text-rv-subtext uppercase tracking-widest">Astra Engine v2.0</div>
+        <div className="flex items-center gap-2">
+          <div className="hidden sm:block text-[10px] font-mono text-rv-subtext uppercase tracking-widest">Astra Engine v2.0</div>
+          <button 
+            onClick={() => setShowRightSidebar(!showRightSidebar)}
+            className="lg:hidden p-1.5 text-rv-subtext hover:text-white bg-rv-surface rounded-sm border border-rv-border ml-2"
+          >
+            <AdjustmentsHorizontalIcon className="w-5 h-5" />
+          </button>
+        </div>
       </header>
 
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex-1 flex overflow-hidden relative">
         {/* Left Control: Asset Queue */}
-        <aside className="w-64 bg-rv-panel border-r border-rv-border flex flex-col shrink-0">
+        <aside className={`
+          fixed lg:relative inset-y-0 left-0 w-64 bg-rv-panel border-r border-rv-border flex flex-col shrink-0 z-40 transition-transform duration-300
+          ${showLeftSidebar ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+        `}>
            <div className="p-4 space-y-6 flex-1 overflow-hidden flex flex-col">
+              <div className="flex lg:hidden justify-between items-center mb-2">
+                <span className="text-[10px] font-black uppercase text-rv-accent tracking-widest">Workspace</span>
+                <button onClick={() => setShowLeftSidebar(false)}><XMarkIcon className="w-5 h-5 text-rv-subtext" /></button>
+              </div>
               <div className="space-y-3">
                  <span className="text-[10px] font-bold uppercase tracking-wider text-rv-subtext flex items-center gap-2">
                     <CloudArrowUpIcon className="w-3.5 h-3.5" /> Source Assets
@@ -194,7 +229,7 @@ const NebulaTool: React.FC<NebulaToolProps> = ({ onBack }) => {
                 <span className="text-[10px] font-bold uppercase tracking-wider text-rv-subtext">Queue Pool</span>
                 <div className="flex-1 overflow-y-auto custom-scrollbar space-y-1">
                    {batchItems.map((item, idx) => (
-                      <div key={item.id} onClick={() => setActiveIndex(idx)} className={`p-2 rounded-sm border cursor-pointer transition-all ${idx === activeIndex ? 'bg-rv-accent/10 border-rv-accent' : 'bg-rv-surface border-rv-border hover:bg-rv-surface/80'}`}>
+                      <div key={item.id} onClick={() => { setActiveIndex(idx); if (isMobile) setShowLeftSidebar(false); }} className={`p-2 rounded-sm border cursor-pointer transition-all ${idx === activeIndex ? 'bg-rv-accent/10 border-rv-accent' : 'bg-rv-surface border-rv-border hover:bg-rv-surface/80'}`}>
                          <div className="flex items-center justify-between">
                             <span className="text-[10px] font-medium text-rv-text truncate max-w-[80%]">{item.name}</span>
                             <div className={`w-1.5 h-1.5 rounded-full ${item.status === 'success' ? 'bg-green-500 shadow-[0_0_5px_green]' : item.status === 'analyzing' ? 'bg-blue-500 animate-pulse' : 'bg-rv-subtext'}`}></div>
@@ -213,7 +248,7 @@ const NebulaTool: React.FC<NebulaToolProps> = ({ onBack }) => {
         </aside>
 
         {/* Center Viewport: Render Area */}
-        <section className="flex-1 relative bg-black flex flex-col">
+        <section className="flex-1 relative bg-black flex flex-col overflow-hidden">
            <div className="flex-1 relative overflow-hidden flex items-center justify-center">
               <NebulaCanvas 
                 imageBase64={activeItem?.imageBase64 || null}
@@ -230,30 +265,37 @@ const NebulaTool: React.FC<NebulaToolProps> = ({ onBack }) => {
               />
            </div>
            
-           <div className="h-14 bg-rv-panel border-t border-rv-border px-4 flex items-center justify-between shrink-0">
+           <div className="h-auto py-2 px-4 bg-rv-panel border-t border-rv-border flex flex-wrap items-center justify-between shrink-0 gap-3">
               <div className="flex items-center gap-3">
-                 <div className="text-[10px] text-rv-subtext uppercase font-bold tracking-widest">Viewport Telemetry</div>
+                 <div className="text-[10px] text-rv-subtext uppercase font-bold tracking-widest hidden sm:block">Viewport Telemetry</div>
                  {activeItem?.status === 'success' && (
                     <div className="flex items-center gap-1.5 bg-green-500/10 text-green-500 px-2 py-0.5 rounded-full border border-green-500/20 text-[9px] font-bold uppercase tracking-tighter">
                        <CheckCircleIcon className="w-2.5 h-2.5" /> AI Calibrated
                     </div>
                  )}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 w-full sm:w-auto">
                  <button 
                   onClick={() => setIsGenerating(true)}
                   disabled={!activeItem || isGenerating}
-                  className="px-8 h-9 bg-rv-text hover:bg-white text-rv-bg text-[10px] font-black uppercase tracking-widest rounded-sm transition-all shadow-xl disabled:opacity-30 flex items-center gap-2"
+                  className="w-full sm:w-auto px-6 lg:px-8 h-9 bg-rv-text hover:bg-white text-rv-bg text-[10px] font-black uppercase tracking-widest rounded-sm transition-all shadow-xl disabled:opacity-30 flex items-center justify-center gap-2"
                  >
-                    <VideoCameraIcon className="w-4 h-4" /> Initialize Video Export
+                    <VideoCameraIcon className="w-4 h-4" /> <span className="sm:hidden">Export</span><span className="hidden sm:inline">Initialize Video Export</span>
                  </button>
               </div>
            </div>
         </section>
 
         {/* Right Sidebar: Settings & Meta */}
-        <aside className="w-80 bg-rv-panel border-l border-rv-border flex flex-col shrink-0">
-           <div className="p-4 space-y-8 overflow-y-auto custom-scrollbar">
+        <aside className={`
+          fixed lg:relative inset-y-0 right-0 w-80 bg-rv-panel border-l border-rv-border flex flex-col shrink-0 z-40 transition-transform duration-300
+          ${showRightSidebar ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}
+        `}>
+           <div className="p-4 space-y-8 overflow-y-auto custom-scrollbar flex-1">
+              <div className="flex lg:hidden justify-between items-center mb-2">
+                <span className="text-[10px] font-black uppercase text-rv-accent tracking-widest">Configuration</span>
+                <button onClick={() => setShowRightSidebar(false)}><XMarkIcon className="w-5 h-5 text-rv-subtext" /></button>
+              </div>
               {/* Nebula Identity Section */}
               <div className="space-y-4">
                  <span className="text-[10px] font-bold uppercase tracking-widest text-rv-subtext flex items-center gap-2">
@@ -317,7 +359,7 @@ const NebulaTool: React.FC<NebulaToolProps> = ({ onBack }) => {
               {/* Export Profile */}
               <div className="space-y-4 pt-6 border-t border-rv-border">
                  <span className="text-[10px] font-bold uppercase tracking-widest text-rv-subtext block">Export Profile</span>
-                 <div className="grid grid-cols-2 gap-2">
+                 <div className="grid grid-cols-3 gap-2">
                     {['original', '1080p', '4k'].map(res => (
                        <button 
                         key={res}
@@ -333,7 +375,7 @@ const NebulaTool: React.FC<NebulaToolProps> = ({ onBack }) => {
 
            <div className="p-4 bg-rv-surface border-t border-rv-border mt-auto">
               <button 
-               onClick={() => setIsGenerating(true)}
+               onClick={() => { setIsGenerating(true); if (isMobile) setShowRightSidebar(false); }}
                disabled={!activeItem || isGenerating}
                className="w-full h-10 bg-rv-accent hover:bg-rv-accentHover text-white text-[10px] font-black uppercase tracking-widest rounded-sm flex items-center justify-center gap-2 transition-all shadow-xl disabled:opacity-30"
               >
@@ -341,6 +383,14 @@ const NebulaTool: React.FC<NebulaToolProps> = ({ onBack }) => {
               </button>
            </div>
         </aside>
+
+        {/* Mobile Overlays */}
+        {(showLeftSidebar || showRightSidebar) && (
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 lg:hidden"
+            onClick={() => { setShowLeftSidebar(false); setShowRightSidebar(false); }}
+          />
+        )}
       </main>
     </div>
   );
@@ -361,13 +411,13 @@ const App: React.FC = () => {
       <header className="h-14 bg-rv-panel border-b border-rv-border flex items-center justify-between px-6 shrink-0">
         <div className="flex items-center gap-2">
            <RocketLaunchIcon className="w-5 h-5 text-rv-accent" />
-           <span className="text-sm font-black tracking-tighter text-rv-text uppercase">Stellar Studio <span className="text-rv-subtext font-light">OS</span></span>
+           <span className="text-sm font-black tracking-tighter text-rv-text uppercase">Stellar Studio <span className="text-rv-subtext font-light hidden xs:inline">OS</span></span>
         </div>
-        <div className="text-[10px] font-mono text-rv-subtext uppercase tracking-widest">Secure Production Environment</div>
+        <div className="text-[10px] font-mono text-rv-subtext uppercase tracking-widest hidden sm:block">Secure Production Environment</div>
       </header>
 
-      <main className="flex-1 flex items-center justify-center p-6 bg-[radial-gradient(circle_at_center,_#111_0%,_#0a0a0a_100%)] overflow-y-auto">
-         <div className="max-w-6xl w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 py-10">
+      <main className="flex-1 overflow-y-auto p-4 sm:p-6 bg-[radial-gradient(circle_at_center,_#111_0%,_#0a0a0a_100%)]">
+         <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 py-4 sm:py-10">
             
             <ToolCard 
                title="Nebula Weaver" 
@@ -406,7 +456,7 @@ const App: React.FC = () => {
 
       <footer className="h-10 bg-rv-panel border-t border-rv-border px-6 flex items-center justify-between shrink-0">
          <span className="text-[9px] font-bold text-rv-subtext uppercase tracking-wider">© 2024 Stellar Studio Production</span>
-         <div className="flex gap-4 text-[9px] font-bold text-rv-subtext uppercase">
+         <div className="hidden sm:flex gap-4 text-[9px] font-bold text-rv-subtext uppercase">
             <span className="hover:text-rv-text cursor-help">Docs</span>
             <span className="hover:text-rv-text cursor-help">API</span>
             <span className="hover:text-rv-text cursor-help">Status</span>
@@ -417,20 +467,20 @@ const App: React.FC = () => {
 };
 
 const ToolCard = ({ title, desc, icon, onLaunch, version }: any) => (
-   <div className="bg-rv-panel border border-rv-border p-8 rounded-sm hover:border-rv-accent transition-all duration-500 group relative overflow-hidden flex flex-col justify-between h-80 cursor-pointer shadow-2xl" onClick={onLaunch}>
+   <div className="bg-rv-panel border border-rv-border p-6 sm:p-8 rounded-sm hover:border-rv-accent transition-all duration-500 group relative overflow-hidden flex flex-col justify-between h-72 sm:h-80 cursor-pointer shadow-2xl" onClick={onLaunch}>
       <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-100 group-hover:text-rv-accent transition-all duration-500 translate-x-4 -translate-y-4 group-hover:translate-x-0 group-hover:translate-y-0">
-         {React.cloneElement(icon, { className: 'w-24 h-24' })}
+         {React.cloneElement(icon, { className: 'w-20 h-20 sm:w-24 sm:h-24' })}
       </div>
       <div>
-         <div className="bg-rv-surface w-12 h-12 flex items-center justify-center rounded-sm border border-rv-border mb-6 group-hover:bg-rv-accent group-hover:text-white transition-all duration-500">
+         <div className="bg-rv-surface w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center rounded-sm border border-rv-border mb-4 sm:mb-6 group-hover:bg-rv-accent group-hover:text-white transition-all duration-500">
             {icon}
          </div>
-         <h2 className="text-xl font-bold text-rv-text mb-3 uppercase tracking-tight">{title}</h2>
-         <p className="text-xs text-rv-subtext leading-relaxed font-light">{desc}</p>
+         <h2 className="text-lg sm:text-xl font-bold text-rv-text mb-2 sm:mb-3 uppercase tracking-tight">{title}</h2>
+         <p className="text-[11px] sm:text-xs text-rv-subtext leading-relaxed font-light">{desc}</p>
       </div>
-      <div className="flex items-center justify-between mt-8">
-         <span className="text-[10px] font-mono font-bold text-rv-subtext/40">{version}</span>
-         <span className="text-[10px] font-black uppercase tracking-widest text-rv-accent group-hover:translate-x-2 transition-transform duration-500 flex items-center gap-1">Initialize <ChevronRightIcon className="w-3 h-3" /></span>
+      <div className="flex items-center justify-between mt-6 sm:mt-8">
+         <span className="text-[9px] sm:text-[10px] font-mono font-bold text-rv-subtext/40">{version}</span>
+         <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-rv-accent group-hover:translate-x-2 transition-transform duration-500 flex items-center gap-1">Initialize <ChevronRightIcon className="w-3 h-3" /></span>
       </div>
    </div>
 );
