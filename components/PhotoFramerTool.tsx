@@ -13,7 +13,8 @@ import {
   ArrowsRightLeftIcon,
   ArrowPathIcon,
   XCircleIcon,
-  Square2StackIcon
+  Square2StackIcon,
+  ExclamationTriangleIcon
 } from '@heroicons/react/24/solid';
 
 interface PhotoFramerToolProps {
@@ -29,16 +30,19 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
   const [shouldZip, setShouldZip] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  
+  // Error Tracking
+  const [errorLog, setErrorLog] = useState<{name: string, reason: string}[]>([]);
 
   const [settingsTab, setSettingsTab] = useState<'frame' | 'image'>('frame');
   
   // Configuration
   const [config, setConfig] = useState<FrameConfig>({
     aspectRatio: 'original',
-    scale: 0.85,
+    scale: 0.82,
     shadowColor: 'black',
     shadowIntensity: 40,
-    blurIntensity: 20,
+    blurIntensity: 22,
     borderRadius: 7
   });
   
@@ -66,8 +70,19 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
 
   // Generate Preview via Async Service
   useEffect(() => {
-      if (images.length === 0) return;
+      if (images.length === 0) {
+          // Clear canvas if no images
+          const canvas = canvasRef.current;
+          const ctx = canvas?.getContext('2d');
+          if (canvas && ctx) {
+              ctx.clearRect(0, 0, canvas.width, canvas.height);
+          }
+          return;
+      }
+
       const activeImg = images[activeIndex];
+      if (!activeImg) return;
+
       let isActive = true;
       
       const updatePreview = async () => {
@@ -150,6 +165,15 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
     setImages(newImages);
     if (activeIndex >= newImages.length) setActiveIndex(Math.max(0, newImages.length - 1));
   };
+  
+  const handleClearAll = () => {
+      if (window.confirm("Are you sure you want to clear all photos?")) {
+          images.forEach(img => URL.revokeObjectURL(img.previewUrl));
+          setImages([]);
+          setActiveIndex(0);
+          if (previewBlobUrlRef.current) URL.revokeObjectURL(previewBlobUrlRef.current);
+      }
+  };
 
   const updateActiveImageEdit = (updates: Partial<ImageEditConfig>) => {
       setImages(prev => {
@@ -171,76 +195,118 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
       
       setIsExporting(true);
       setExportProgress({ current: 0, total: images.length });
+      setErrorLog([]); // Clear previous errors
+      
       abortControllerRef.current = new AbortController();
       const signal = abortControllerRef.current.signal;
       
       const zip = shouldZip ? new JSZip() : null;
+      let hasZipContent = false;
+      const currentErrors: {name: string, reason: string}[] = [];
       
       try {
           for (let i = 0; i < images.length; i++) {
+              // Check cancel BEFORE processing
               if (signal.aborted) throw new Error("Cancelled");
               
+              // Update progress before yielding
+              setExportProgress({ current: i + 1, total: images.length });
+              
+              // Yield to main thread to allow UI updates / cancellation
+              await new Promise(r => setTimeout(r, 50));
+              
+              if (signal.aborted) throw new Error("Cancelled");
+
               const imgObj = images[i];
               
-              // 1. Get Image
-              const img = new Image();
-              img.src = imgObj.previewUrl;
-              await new Promise((r) => { img.onload = r; });
-              
-              // 2. Request Service Render
-              // Yield to main thread briefly to allow UI update
-              await new Promise(r => setTimeout(r, 0));
+              try {
+                  // 1. Get Image
+                  const img = new Image();
+                  img.src = imgObj.previewUrl;
+                  await new Promise((r, j) => { 
+                      img.onload = r; 
+                      img.onerror = () => j(new Error("Failed to load image source")); 
+                  });
+                  
+                  // Check cancel again before render
+                  if (signal.aborted) throw new Error("Cancelled");
 
-              const req: RenderRequest = {
-                  id: `export-${imgObj.id}`,
-                  imageBitmap: img,
-                  frameConfig: config,
-                  editConfig: imgObj.editConfig,
-                  quality: 'full'
-              };
-              
-              const blob = await renderFrame(req);
+                  // 3. Render
+                  const req: RenderRequest = {
+                      id: `export-${imgObj.id}`,
+                      imageBitmap: img,
+                      frameConfig: config,
+                      editConfig: imgObj.editConfig,
+                      quality: 'full'
+                  };
+                  
+                  const blob = await renderFrame(req);
 
-              if (blob) {
-                  const originalName = imgObj.file.name.replace(/\.[^/.]+$/, "");
-                  const fileName = `${originalName}_framed.jpg`;
+                  if (blob) {
+                      const originalName = imgObj.file.name.replace(/\.[^/.]+$/, "");
+                      const fileName = `${originalName}_framed.jpg`;
 
-                  if (zip) {
-                      zip.file(fileName, blob);
+                      if (zip) {
+                          zip.file(fileName, blob);
+                          hasZipContent = true;
+                      } else {
+                          // Direct Download
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+                          link.href = url;
+                          link.download = fileName;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                          URL.revokeObjectURL(url);
+                          // Delay to prevent browser choking on download
+                          await new Promise(r => setTimeout(r, 200));
+                      }
                   } else {
-                      // Direct Download
-                      const url = URL.createObjectURL(blob);
-                      const link = document.createElement('a');
-                      link.href = url;
-                      link.download = fileName;
-                      document.body.appendChild(link);
-                      link.click();
-                      document.body.removeChild(link);
-                      URL.revokeObjectURL(url);
-                      // Slight delay to prevent browser choking on multiple downloads
-                      await new Promise(r => setTimeout(r, 200));
+                      throw new Error("Render returned no data");
                   }
+                  
+              } catch (innerErr: any) {
+                  if (innerErr.message === "Cancelled") throw innerErr;
+                  console.error(`Export failed for ${imgObj.file.name}:`, innerErr);
+                  currentErrors.push({ 
+                      name: imgObj.file.name, 
+                      reason: innerErr.message || "Unknown rendering error" 
+                  });
               }
-              
-              setExportProgress({ current: i + 1, total: images.length });
           }
           
-          if (zip && !signal.aborted) {
-              const content = await zip.generateAsync({ type: "blob" });
-              const url = URL.createObjectURL(content);
-              const link = document.createElement('a');
-              link.href = url;
-              link.download = `framed_photos_batch_${Date.now()}.zip`;
-              document.body.appendChild(link);
-              link.click();
-              document.body.removeChild(link);
-              URL.revokeObjectURL(url);
+          if (zip && hasZipContent && !signal.aborted) {
+              setExportProgress(prev => ({ ...prev, current: images.length })); // Ensure UI shows done
+              // Small yield to show "Compressing" status if we added one, currently just shows progress
+              
+              // Wrap compression in timeout to prevent immediate UI freeze
+              await new Promise(r => setTimeout(r, 100));
+              
+              const content = await zip.generateAsync({ type: "blob" }, (metadata) => {
+                   // Optional: Could update a "compressing" state here
+              });
+              
+              if (!signal.aborted) {
+                  const url = URL.createObjectURL(content);
+                  const link = document.createElement('a');
+                  link.href = url;
+                  link.download = `framed_photos_batch_${Date.now()}.zip`;
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                  URL.revokeObjectURL(url);
+              }
+          }
+
+          if (currentErrors.length > 0) {
+              setErrorLog(currentErrors);
           }
 
       } catch (err: any) {
           if (err.message !== "Cancelled") {
-              console.error("Export failed:", err);
-              alert("Export encountered an error. Check console.");
+              console.error("Export process critical failure:", err);
+              alert("Export stopped unexpectedly. Please refresh and try again.");
           }
       } finally {
           setIsExporting(false);
@@ -278,7 +344,18 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
         {/* Left: Sources */}
         <section className="lg:col-span-3 space-y-4">
             <div className="bg-sc-card border border-sc-border rounded-sm p-5 shadow-sc flex flex-col h-[80vh] lg:h-auto">
-                <h2 className="text-xs font-bold uppercase text-sc-subtext mb-4 border-b border-sc-border pb-2">Photos ({images.length})</h2>
+                <div className="flex items-center justify-between mb-4 border-b border-sc-border pb-2">
+                    <h2 className="text-xs font-bold uppercase text-sc-subtext">Photos ({images.length})</h2>
+                    {images.length > 0 && (
+                        <button 
+                            onClick={handleClearAll}
+                            disabled={isExporting}
+                            className="text-[10px] text-red-400 hover:text-red-600 font-bold uppercase transition-colors disabled:opacity-50"
+                        >
+                            Clear All
+                        </button>
+                    )}
+                </div>
                 
                 <input 
                   type="file" 
@@ -350,6 +427,9 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
                                     style={{ width: `${(exportProgress.current / exportProgress.total) * 100}%` }}
                                  ></div>
                              </div>
+                             {shouldZip && exportProgress.current === exportProgress.total && (
+                                 <div className="text-xs text-yellow-300 mb-4 animate-pulse">Compressing Archive...</div>
+                             )}
                              <button 
                                 onClick={handleCancel}
                                 className="px-6 py-2 border border-red-500 text-red-400 hover:bg-red-500/10 rounded-[3px] text-xs font-bold flex items-center gap-2 transition-colors"
@@ -359,9 +439,38 @@ const PhotoFramerTool: React.FC<PhotoFramerToolProps> = ({ onBack }) => {
                          </div>
                      )}
                  </div>
+                 
+                 {/* Error Report Modal */}
+                 {errorLog.length > 0 && !isExporting && (
+                    <div className="absolute inset-0 bg-black/60 z-50 flex items-center justify-center p-6 animate-fade-in">
+                        <div className="bg-white rounded-[3px] shadow-2xl max-w-md w-full max-h-[80%] flex flex-col overflow-hidden">
+                            <div className="p-4 bg-red-50 border-b border-red-100 flex items-center gap-3 text-red-700 font-bold">
+                                <ExclamationTriangleIcon className="w-6 h-6" />
+                                <div>Export Completed with Errors</div>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                                <div className="text-xs text-sc-subtext mb-2">The following files failed to export:</div>
+                                {errorLog.map((err, i) => (
+                                    <div key={i} className="bg-gray-50 border border-gray-200 p-2 rounded-[3px] text-xs">
+                                        <div className="font-bold text-gray-700 truncate">{err.name}</div>
+                                        <div className="text-red-500 mt-1">{err.reason}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="p-4 border-t border-sc-border bg-gray-50 flex justify-end">
+                                <button 
+                                    onClick={() => setErrorLog([])}
+                                    className="px-4 py-2 bg-sc-primary text-white text-xs font-bold rounded-[3px] hover:bg-sc-primaryHover"
+                                >
+                                    Dismiss
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                 )}
 
                  {/* Navigation Overlay */}
-                 {images.length > 1 && !isExporting && (
+                 {images.length > 1 && !isExporting && errorLog.length === 0 && (
                      <>
                         <button 
                             onClick={() => setActiveIndex(Math.max(0, activeIndex - 1))} 

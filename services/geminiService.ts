@@ -9,7 +9,8 @@ export const identifyNebulaFromImage = async (imageBase64: string): Promise<stri
   try {
     const base64Data = imageBase64.split(',')[1] || imageBase64;
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash", // Use flash for speed
+      // Use gemini-3-flash-preview for speed and efficiency in identification tasks
+      model: "gemini-3-flash-preview", 
       contents: {
         parts: [
           { inlineData: { mimeType: "image/jpeg", data: base64Data } },
@@ -39,7 +40,8 @@ export const analyzeNebulaImage = async (
     const base64Data = imageBase64.split(',')[1] || imageBase64;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      // Use gemini-3-flash-preview for structured analysis tasks
+      model: "gemini-3-flash-preview",
       contents: {
         parts: [
           { inlineData: { mimeType: "image/jpeg", data: base64Data } },
@@ -73,10 +75,10 @@ export const analyzeNebulaImage = async (
       },
     });
 
-    const jsonText = response.text;
-    if (!jsonText) throw new Error("No analysis returned");
+    const jsonStr = response.text;
+    if (!jsonStr) throw new Error("No analysis returned");
 
-    return JSON.parse(jsonText) as NebulaAnalysis;
+    return JSON.parse(jsonStr) as NebulaAnalysis;
   } catch (error) {
     console.error("Gemini Analysis Failed:", error);
     return {
