@@ -1,6 +1,41 @@
 
 import { ImageFormat } from '../types';
 
+type BlobCanvas = Pick<HTMLCanvasElement, 'toBlob'>;
+
+const SUPPORTED_OUTPUT_MIME_TYPES = new Set<ImageFormat>([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/avif'
+]);
+
+export const normalizeOutputMimeType = (
+  fileMimeType: string,
+  outputFormat: 'original' | ImageFormat
+): ImageFormat => {
+  const requested = outputFormat === 'original' ? fileMimeType : outputFormat;
+  return SUPPORTED_OUTPUT_MIME_TYPES.has(requested as ImageFormat)
+    ? (requested as ImageFormat)
+    : 'image/jpeg';
+};
+
+export const safeCanvasToBlob = (
+  canvas: BlobCanvas,
+  mimeType: string,
+  quality?: number
+): Promise<Blob> => {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error(`Canvas toBlob returned null for ${mimeType}`));
+        return;
+      }
+      resolve(blob);
+    }, mimeType, quality);
+  });
+};
+
 /**
  * Compresses an image to fit under a specified size in KB.
  * Uses binary search on the quality parameter for JPEG/WEBP.
@@ -12,7 +47,7 @@ export const compressImageToTarget = async (
   outputFormat: 'original' | ImageFormat
 ): Promise<Blob> => {
   const targetBytes = targetSizeKB * 1024;
-  const mimeType = outputFormat === 'original' ? file.type : outputFormat;
+  const mimeType = normalizeOutputMimeType(file.type, outputFormat);
   
   // Load image
   const img = await loadImage(file);
@@ -26,8 +61,7 @@ export const compressImageToTarget = async (
   // If PNG, we can't really do quality-based compression in standard canvas API
   // We return a standard blob and hope for the best, or suggest JPEG/WEBP
   if (mimeType === 'image/png') {
-    const blob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), 'image/png'));
-    return blob;
+    return safeCanvasToBlob(canvas, 'image/png');
   }
 
   // Binary search for optimal quality (0.0 to 1.0)
@@ -38,9 +72,7 @@ export const compressImageToTarget = async (
 
   for (let i = 0; i < iterations; i++) {
     const quality = (min + max) / 2;
-    const blob = await new Promise<Blob>((resolve) => 
-      canvas.toBlob((b) => resolve(b!), mimeType as string, quality)
-    );
+    const blob = await safeCanvasToBlob(canvas, mimeType, quality);
 
     if (blob.size <= targetBytes) {
       bestBlob = blob;
@@ -58,9 +90,7 @@ export const compressImageToTarget = async (
       canvas.height = Math.floor(img.naturalHeight * scale);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       
-      const blob = await new Promise<Blob>((resolve) => 
-        canvas.toBlob((b) => resolve(b!), mimeType as string, 0.1)
-      );
+      const blob = await safeCanvasToBlob(canvas, mimeType, 0.1);
       
       if (blob.size <= targetBytes) {
         bestBlob = blob;
@@ -72,9 +102,7 @@ export const compressImageToTarget = async (
 
   if (!bestBlob) {
     // Last resort: return lowest possible quality/size
-    return new Promise<Blob>((resolve) => 
-      canvas.toBlob((b) => resolve(b!), mimeType as string, 0.01)
-    );
+    return safeCanvasToBlob(canvas, mimeType, 0.01);
   }
 
   return bestBlob;

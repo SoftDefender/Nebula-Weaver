@@ -1,6 +1,14 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { AnimationConfig, ParticleConfig, NebulaAnalysis, Particle, VideoConfig } from '../types';
 import { PlayIcon, PauseIcon, ArrowPathIcon } from '@heroicons/react/24/solid';
+import {
+  canStartRecording,
+  resolveRecordingMimeType,
+  sanitizeRecordingSettings,
+  createRecorderOptions,
+  hasUsableRecordingChunks,
+  chooseEffectiveExportFormat
+} from '../services/nebulaRecording';
 
 interface NebulaCanvasProps {
   imageBase64: string | null;
@@ -10,11 +18,10 @@ interface NebulaCanvasProps {
   analysis: NebulaAnalysis | undefined;
   detectedParticles: Particle[] | null; 
   isRecording: boolean;
-  onRecordingComplete: (url: string) => void;
-  triggerPreview: number; 
+  onRecordingComplete: (url: string, mimeType: string) => void;
+  onRecordingError?: (reason: string) => void;
   zoomOrigin: { x: number; y: number }; // Received from parent
   onSetZoomOrigin?: (x: number, y: number) => void;
-  onImageReady?: () => void; // Handshake signal
 }
 
 const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
@@ -26,10 +33,9 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   detectedParticles,
   isRecording,
   onRecordingComplete,
-  triggerPreview,
+  onRecordingError,
   zoomOrigin,
-  onSetZoomOrigin,
-  onImageReady
+  onSetZoomOrigin
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(0);
@@ -44,7 +50,10 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   
   // Ref for recording progress to bypass React state updates during high-load encoding
   const recordingProgressRef = useRef(0);
+  const playbackProgressRef = useRef(0);
+  const lastUiProgressCommitRef = useRef(0);
   const drawingInProgressRef = useRef(false);
+  const recordingStopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(true);
   const [playbackProgress, setPlaybackProgress] = useState(0); 
@@ -137,23 +146,13 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageBase64, isMobile]); 
 
-  // Handshake Synchronization Effect
-  useEffect(() => {
-    if (isImageLoaded && onImageReady) {
-        // Small timeout to ensure the render cycle is complete
-        const t = setTimeout(() => {
-            onImageReady();
-        }, 50);
-        return () => clearTimeout(t);
-    }
-  }, [isImageLoaded, onImageReady]);
-
-
   useEffect(() => {
     setPlaybackProgress(0);
+    playbackProgressRef.current = 0;
+    lastUiProgressCommitRef.current = 0;
     setIsPlaying(true);
     lastTimeRef.current = 0;
-  }, [triggerPreview]); 
+  }, [imageBase64]); 
 
   useEffect(() => {
     if (imageRef.current) {
@@ -196,8 +195,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
       }
     }
 
-    w = Math.floor(w / 2) * 2;
-    h = Math.floor(h / 2) * 2;
+    w = Math.max(2, Math.round(w));
+    h = Math.max(2, Math.round(h));
 
     setCanvasSize({ width: w, height: h });
   };
@@ -301,7 +300,8 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     const resolutionScale = canvasDiagonal / refDiagonal;
 
     ctx.globalCompositeOperation = 'screen'; 
-    ctx.globalAlpha = Math.min(1, brightness); 
+    const baseAlpha = Math.min(1, brightness);
+    ctx.globalAlpha = baseAlpha;
 
     const zoomDelta = currentScale - animationConfig.initialScale;
     const internalSizeMultiplier = 0.25;
@@ -315,6 +315,9 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     }
 
     const brightnessBloom = brightness > 1.5 ? (1 + (brightness - 1.5) * 0.5) : 1.0;
+    const defaultSprite = starSpriteRef.current || createStarSprite(particleConfig.color, feathering);
+    const colorSpriteCache = new Map<string, HTMLCanvasElement>();
+    const margin = 100 * resolutionScale;
 
     if (baseSize > 0 && brightness > 0) {
       const pLen = activeParticles.length;
@@ -322,17 +325,18 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         const p = activeParticles[i];
 
         // Apply individual particle alpha if present (procedural variance)
-        if (p.alpha !== undefined) {
-           ctx.globalAlpha = Math.min(1, brightness * p.alpha);
-        } else {
-           ctx.globalAlpha = Math.min(1, brightness);
-        }
+        ctx.globalAlpha = p.alpha !== undefined ? Math.min(1, baseAlpha * p.alpha) : baseAlpha;
 
-        let sprite = starSpriteRef.current;
+        let sprite = defaultSprite;
         if (p.color) {
-           sprite = createStarSprite(p.color, feathering);
-        } else {
-           sprite = createStarSprite(particleConfig.color, feathering);
+          const cached = colorSpriteCache.get(p.color);
+          if (cached) {
+            sprite = cached;
+          } else {
+            const generated = createStarSprite(p.color, feathering);
+            colorSpriteCache.set(p.color, generated);
+            sprite = generated;
+          }
         }
         if (!sprite) continue;
 
@@ -345,7 +349,6 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         const finalX = zOriginX + vecX * parallaxScale;
         const finalY = zOriginY + vecY * parallaxScale;
         
-        const margin = 100 * resolutionScale;
         if (finalX < -margin || finalX > cW + margin || 
             finalY < -margin || finalY > cH + margin) continue;
 
@@ -443,12 +446,17 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     const safeDt = Math.min(dt, 0.1);
 
     if (isPlaying && !isRecording) {
-      // Normal React state update for preview
-      setPlaybackProgress(prev => {
-        let next = prev + (safeDt / animationConfig.duration);
-        if (next >= 1) next = 0; 
-        return next;
-      });
+      const duration = Math.max(animationConfig.duration, 0.001);
+      let next = playbackProgressRef.current + (safeDt / duration);
+      if (next >= 1) next = 0;
+      playbackProgressRef.current = next;
+      drawFrame(next);
+
+      // Throttle UI updates to reduce component re-render pressure during playback.
+      if (time - lastUiProgressCommitRef.current >= 80 || next === 0) {
+        lastUiProgressCommitRef.current = time;
+        setPlaybackProgress(next);
+      }
     } else if (isRecording) {
        // Direct Drive for Recording: Bypass React State to avoid frame drops on mobile
        const duration = animationConfig.duration;
@@ -463,13 +471,30 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     requestRef.current = requestAnimationFrame(animate);
   }, [isPlaying, isRecording, animationConfig.duration, drawFrame]);
 
-  useEffect(() => {
-    // Only trigger drawing from playbackProgress change if NOT recording
-    // If recording, animate loop handles it directly
-    if (!isRecording) {
-       drawFrame(playbackProgress);
+  const clearRecordingStopTimeout = useCallback(() => {
+    if (recordingStopTimeoutRef.current) {
+      clearTimeout(recordingStopTimeoutRef.current);
+      recordingStopTimeoutRef.current = null;
     }
-  }, [playbackProgress, drawFrame, isRecording]);
+  }, []);
+
+  const handleRecordingFailure = useCallback(
+    (reason: string) => {
+      if (hasCompletedRef.current) return;
+      hasCompletedRef.current = true;
+      clearRecordingStopTimeout();
+      setIsPlaying(false);
+      onRecordingError?.(reason);
+    },
+    [clearRecordingStopTimeout, onRecordingError]
+  );
+
+  useEffect(() => {
+    // Allow paused scrubbing/parameter edits to redraw without forcing full-rate React updates.
+    if (!isRecording && !isPlaying) {
+      drawFrame(playbackProgressRef.current);
+    }
+  }, [drawFrame, isRecording, isPlaying, playbackProgress]);
 
   useEffect(() => {
     lastTimeRef.current = 0;
@@ -484,14 +509,20 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
     if (isRecording && isImageLoaded) {
       hasCompletedRef.current = false;
       setPlaybackProgress(0);
+      playbackProgressRef.current = 0;
       recordingProgressRef.current = 0; // Reset direct drive ref
+      lastUiProgressCommitRef.current = 0;
+      clearRecordingStopTimeout();
       
       setIsPlaying(true);
       lastTimeRef.current = 0;
       chunksRef.current = [];
       
       const canvas = canvasRef.current;
-      if (!canvas) return;
+      if (!canvas) {
+        handleRecordingFailure('canvas-unavailable');
+        return;
+      }
       
       // Warm-up sequence: Draw frame 0 twice to ensure buffer is flushed
       requestAnimationFrame(() => {
@@ -499,58 +530,60 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
         requestAnimationFrame(() => {
              drawFrame(0);
              
-             // --- Mobile Safety Guard ---
-             const safeFPS = isMobile ? Math.min(videoConfig.fps, 30) : videoConfig.fps;
-             const safeBitrate = isMobile ? Math.min(videoConfig.bitrate, 8) : videoConfig.bitrate;
+             const { fps: safeFPS, bitrateMbps: safeBitrate } = sanitizeRecordingSettings(
+               videoConfig.fps,
+               videoConfig.bitrate,
+               isMobile
+             );
              
-             if (isMobile && (videoConfig.fps > 30 || videoConfig.bitrate > 8)) {
-               console.warn(`[Mobile Optimization] Clamping export settings: FPS ${videoConfig.fps}->${safeFPS}, Bitrate ${videoConfig.bitrate}->${safeBitrate}Mbps to prevent crash.`);
+             if (safeFPS !== videoConfig.fps || safeBitrate !== videoConfig.bitrate) {
+               console.warn(
+                 `[Recording Optimization] Clamping export settings: FPS ${videoConfig.fps}->${safeFPS}, Bitrate ${videoConfig.bitrate}->${safeBitrate}Mbps`
+               );
              }
 
-             // --- Recording Start ---
-             const stream = canvas.captureStream(safeFPS);
-             if (stream.getTracks().length === 0 || !stream.active) {
-                console.error("Stream failed to initialize or has no tracks.");
-                if (!hasCompletedRef.current) {
-                     hasCompletedRef.current = true;
-                     setIsPlaying(false);
-                }
+              const pixelCount = canvas.width * canvas.height;
+              const formatDecision = chooseEffectiveExportFormat(videoConfig.format, pixelCount);
+              if (formatDecision.downgraded) {
+                console.warn(
+                  `[Recording Compatibility] Format downgraded ${videoConfig.format}->${formatDecision.format}. reason=${formatDecision.reason}`
+                );
+              }
+
+              // --- Recording Start ---
+              const stream = canvas.captureStream(safeFPS);
+              if (!canStartRecording(stream)) {
+                 console.error("Stream failed to initialize or has no tracks.");
+                handleRecordingFailure('capture-stream-not-recordable');
                 return;
              }
 
-             let mimeType = 'video/webm;codecs=vp9';
-             const requestedFormat = videoConfig.format;
-             
-             // Check Format Support
-             if (requestedFormat === 'mp4' || requestedFormat === 'mov') {
-                if (MediaRecorder.isTypeSupported('video/mp4')) {
-                    mimeType = 'video/mp4'; 
-                } else if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
-                    mimeType = 'video/mp4;codecs=h264,aac';
-                }
-             } else if (requestedFormat === 'mkv') {
-                if (MediaRecorder.isTypeSupported('video/x-matroska')) {
-                    mimeType = 'video/x-matroska';
-                }
-             }
+              const requestedFormat = formatDecision.format;
+              const resolvedMimeType = resolveRecordingMimeType(requestedFormat);
+              if (!resolvedMimeType) {
+                console.warn(`No explicit mime type is supported for requested format "${requestedFormat}", using browser default MediaRecorder output.`);
+              }
+              const options = createRecorderOptions(resolvedMimeType, safeBitrate);
     
-             const options: MediaRecorderOptions = {
-               mimeType: mimeType,
-               bitsPerSecond: safeBitrate * 1000000 
-             };
-    
-             let recorder: MediaRecorder;
-             try {
-               recorder = new MediaRecorder(stream, options);
-             } catch (e) {
+              let recorder: MediaRecorder;
+              try {
+                recorder = new MediaRecorder(stream, options);
+              } catch (e) {
                console.warn('Failed to create recorder with options', options, e);
-               recorder = new MediaRecorder(stream);
+               try {
+                 recorder = new MediaRecorder(stream);
+               } catch (fallbackErr) {
+                 console.error('Failed to create MediaRecorder fallback', fallbackErr);
+                 handleRecordingFailure('media-recorder-construction-failed');
+                 return;
+               }
              }
-             
+              
              recorder.onerror = (e) => {
-                console.error("MediaRecorder Error:", e);
-                if (recorder.state !== 'inactive') recorder.stop();
-             };
+                 console.error("MediaRecorder Error:", e);
+                 handleRecordingFailure('media-recorder-runtime-error');
+                 if (recorder.state !== 'inactive') recorder.stop();
+              };
 
              mediaRecorderRef.current = recorder;
     
@@ -558,42 +591,58 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
                if (e.data.size > 0) chunksRef.current.push(e.data);
              };
     
-             recorder.onstop = async () => {
-               if (hasCompletedRef.current) return;
-               hasCompletedRef.current = true;
+              recorder.onstop = async () => {
+                 if (hasCompletedRef.current) return;
+                 hasCompletedRef.current = true;
+                 clearRecordingStopTimeout();
 
-               const blobType = mediaRecorderRef.current?.mimeType || 'video/webm';
-               const finalBlob = new Blob(chunksRef.current, { type: blobType });
-               
-               const url = URL.createObjectURL(finalBlob);
-               onRecordingComplete(url);
-               setIsPlaying(false);
-             };
+                 if (!hasUsableRecordingChunks(chunksRef.current)) {
+                   stream.getTracks().forEach(track => track.stop());
+                   handleRecordingFailure('recording-empty-output');
+                   return;
+                 }
+                 const blobType = mediaRecorderRef.current?.mimeType || resolvedMimeType || 'video/webm';
+                 const finalBlob = new Blob(chunksRef.current, { type: blobType });
+                 if (finalBlob.size === 0) {
+                   stream.getTracks().forEach(track => track.stop());
+                   handleRecordingFailure('recording-empty-blob');
+                   return;
+                 }
+                 
+                 const url = URL.createObjectURL(finalBlob);
+                onRecordingComplete(url, blobType);
+                setIsPlaying(false);
+                stream.getTracks().forEach(track => track.stop());
+              };
     
-             if (recorder.state === 'inactive') {
-                // Timeslice 200ms to ensure chunks are flushed frequently on mobile
-                recorder.start(200);
-             }
+              if (recorder.state === 'inactive') {
+                 // Start without timeslice to preserve stable duration metadata.
+                 recorder.start();
+              }
     
              const durationMs = animationConfig.duration * 1000;
-             setTimeout(() => {
-               if (recorder.state === 'recording') recorder.stop();
-             }, durationMs + 500); 
+             recordingStopTimeoutRef.current = setTimeout(() => {
+                if (recorder.state === 'recording') recorder.stop();
+              }, durationMs + 500); 
 
         });
       });
     }
 
     return () => {
+      clearRecordingStopTimeout();
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop();
       }
     };
-  }, [isRecording, isImageLoaded, animationConfig.duration, videoConfig.bitrate, videoConfig.format, videoConfig.fps, onRecordingComplete, isMobile, drawFrame]);
+  }, [isRecording, isImageLoaded, animationConfig.duration, videoConfig.bitrate, videoConfig.format, videoConfig.fps, onRecordingComplete, isMobile, drawFrame, handleRecordingFailure, clearRecordingStopTimeout]);
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
+    playbackProgressRef.current = val;
+    lastUiProgressCommitRef.current = performance.now();
     setPlaybackProgress(val);
+    drawFrame(val);
     if (isPlaying) setIsPlaying(false); 
   };
 
@@ -641,7 +690,13 @@ const NebulaCanvas: React.FC<NebulaCanvasProps> = ({
             </div>
 
             <button 
-              onClick={(e) => { e.stopPropagation(); setPlaybackProgress(0); setIsPlaying(true); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                playbackProgressRef.current = 0;
+                lastUiProgressCommitRef.current = 0;
+                setPlaybackProgress(0);
+                setIsPlaying(true);
+              }}
               className="p-2 text-sc-subtext hover:text-sc-primary transition-colors"
               title="Restart"
             >

@@ -33,6 +33,9 @@ import {
 import { ModelStudioItem, ViewerConfig, ModelFormat, ModelNode, ActionType, ModelLayerProperties } from '../types';
 import ModelViewer3D from './ModelViewer3D';
 import { load3DModel, analyzeModel, buildSceneTree, exportToGLB, autoCenterModel, normalizeModelScale } from '../services/threeService';
+import { getNextActiveIndexAfterDelete } from '../services/modelStudioState';
+import { wouldCreateParentCycle, clearDanglingParentRefs } from '../services/modelHierarchy';
+import { moveLayerById, getNextActiveIndexAfterMove } from '../services/modelLayerOrdering';
 import * as THREE from 'three';
 
 interface ModelStudioToolProps {
@@ -94,6 +97,28 @@ const ModelStudioTool: React.FC<ModelStudioToolProps> = ({ onBack }) => {
 
   const activeLayer = useMemo(() => layers[activeIndex] || null, [layers, activeIndex]);
 
+  const disposeLayerResources = (layer: ModelStudioItem) => {
+    const obj = layerObjects.get(layer.id);
+    if (obj) {
+      obj.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const mesh = child as THREE.Mesh;
+          mesh.geometry.dispose();
+          if (Array.isArray(mesh.material)) {
+            mesh.material.forEach((m) => m.dispose());
+          } else {
+            mesh.material.dispose();
+          }
+        }
+      });
+      layerObjects.delete(layer.id);
+    }
+
+    if (layer.url.startsWith('blob:')) {
+      URL.revokeObjectURL(layer.url);
+    }
+  };
+
   // Actions
   const handleImportRequest = (files: FileList) => {
     setPendingFiles(files);
@@ -111,22 +136,7 @@ const ModelStudioTool: React.FC<ModelStudioToolProps> = ({ onBack }) => {
 
     if (mode === 'new') {
       // Clear existing session
-      layers.forEach(l => {
-        const obj = layerObjects.get(l.id);
-        if (obj) {
-          obj.traverse((child) => {
-            if ((child as THREE.Mesh).isMesh) {
-              (child as THREE.Mesh).geometry.dispose();
-              if (Array.isArray((child as THREE.Mesh).material)) {
-                ((child as THREE.Mesh).material as THREE.Material[]).forEach(m => m.dispose());
-              } else {
-                ((child as THREE.Mesh).material as THREE.Material).dispose();
-              }
-            }
-          });
-        }
-        URL.revokeObjectURL(l.url);
-      });
+      layers.forEach((l) => disposeLayerResources(l));
       layerObjects.clear();
       setLayers([]);
       setActiveIndex(-1);
@@ -213,21 +223,38 @@ const ModelStudioTool: React.FC<ModelStudioToolProps> = ({ onBack }) => {
   };
 
   const moveLayer = (id: string, dir: 'up' | 'down') => {
-    const idx = layers.findIndex(l => l.id === id);
-    if (idx === -1) return;
-    const newLayers = [...layers];
-    const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
-    if (targetIdx < 0 || targetIdx >= layers.length) return;
-    
-    [newLayers[idx], newLayers[targetIdx]] = [newLayers[targetIdx], newLayers[idx]];
-    setLayers(newLayers);
-    setActiveIndex(targetIdx);
+    setLayers(prev => {
+      const moved = moveLayerById(prev, id, dir);
+      if (!moved) return prev;
+      setActiveIndex(current => getNextActiveIndexAfterMove(current, moved.movedFrom, moved.movedTo));
+      return moved.nextLayers;
+    });
   };
 
   const deleteLayer = (id: string) => {
-    setLayers(prev => prev.filter(l => l.id !== id));
-    layerObjects.delete(id);
-    if (activeIndex >= layers.length - 1) setActiveIndex(layers.length - 2);
+    const targetIndex = layers.findIndex(l => l.id === id);
+    if (targetIndex === -1) return;
+
+    const targetLayer = layers[targetIndex];
+    disposeLayerResources(targetLayer);
+
+    const nextLayers = clearDanglingParentRefs(
+      layers.filter(l => l.id !== id),
+      id
+    );
+    setLayers(nextLayers);
+    setActiveIndex(prev => getNextActiveIndexAfterDelete(prev, targetIndex, nextLayers.length));
+  };
+
+  const setLayerParent = (layerId: string, parentId?: string) => {
+    const nextParentId = parentId || undefined;
+    if (wouldCreateParentCycle(layers, layerId, nextParentId)) {
+      console.warn(`[ModelStudio] Parent bind rejected to prevent cycle: ${layerId} -> ${nextParentId}`);
+      // Force a re-render so controlled form fields snap back to canonical state.
+      setLayers(prev => [...prev]);
+      return;
+    }
+    updateLayerProperty(layerId, { parentId: nextParentId });
   };
 
   const toggleVisibility = (id: string) => {
@@ -330,12 +357,14 @@ const ModelStudioTool: React.FC<ModelStudioToolProps> = ({ onBack }) => {
               {layers.map((layer, idx) => (
                 <div 
                   key={layer.id}
+                  data-testid={`layer-row-${idx}`}
+                  data-layer-id={layer.id}
                   onClick={() => { setActiveIndex(idx); if (isMobile) setShowLeftSidebar(false); }}
                   className={`flex items-center gap-2 px-2 py-2 rounded-sm cursor-pointer transition-all border group ${idx === activeIndex ? 'bg-rv-accent/10 border-rv-accent' : 'border-transparent hover:bg-white/5'}`}
                 >
                   <div className="flex flex-col gap-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
-                    <button onClick={(e) => { e.stopPropagation(); moveLayer(layer.id, 'up'); }} className="text-rv-subtext hover:text-white"><ChevronDownIcon className="w-3 h-3 rotate-180" /></button>
-                    <button onClick={(e) => { e.stopPropagation(); moveLayer(layer.id, 'down'); }} className="text-rv-subtext hover:text-white"><ChevronDownIcon className="w-3 h-3" /></button>
+                    <button data-testid={`layer-move-up-${idx}`} data-layer-id={layer.id} onClick={(e) => { e.stopPropagation(); moveLayer(layer.id, 'up'); }} className="text-rv-subtext hover:text-white"><ChevronDownIcon className="w-3 h-3 rotate-180" /></button>
+                    <button data-testid={`layer-move-down-${idx}`} data-layer-id={layer.id} onClick={(e) => { e.stopPropagation(); moveLayer(layer.id, 'down'); }} className="text-rv-subtext hover:text-white"><ChevronDownIcon className="w-3 h-3" /></button>
                   </div>
                   <CubeIcon className={`w-3.5 h-3.5 ${idx === activeIndex ? 'text-rv-accent' : 'text-rv-subtext'}`} />
                   <span className={`text-[11px] truncate flex-1 ${idx === activeIndex ? 'text-rv-text font-bold' : 'text-rv-subtext'}`}>{layer.name}</span>
@@ -433,6 +462,47 @@ const ModelStudioTool: React.FC<ModelStudioToolProps> = ({ onBack }) => {
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-8 custom-scrollbar">
+            <div className="space-y-4">
+              <span className="text-[10px] font-bold text-rv-subtext uppercase tracking-widest flex items-center gap-2">
+                <SunIcon className="w-3 h-3" /> Viewport Lighting
+              </span>
+              <div>
+                <div className="text-[9px] text-rv-subtext mb-1 uppercase tracking-tighter">Environment</div>
+                <select
+                  value={viewerConfig.environment}
+                  onChange={(e) =>
+                    setViewerConfig(prev => ({
+                      ...prev,
+                      environment: e.target.value as ViewerConfig['environment']
+                    }))
+                  }
+                  className="w-full bg-rv-surface border border-rv-border text-[10px] font-bold text-rv-text p-2 outline-none focus:border-rv-accent"
+                >
+                  <option value="neutral">Neutral</option>
+                  <option value="studio">Studio</option>
+                  <option value="night">Night</option>
+                  <option value="sunset">Sunset</option>
+                  <option value="warehouse">Warehouse</option>
+                </select>
+              </div>
+              <div>
+                <div className="flex justify-between text-[9px] text-rv-subtext mb-1 uppercase tracking-tighter">
+                  <span>Exposure</span>
+                  <span>{viewerConfig.exposure.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.2"
+                  max="2.5"
+                  step="0.1"
+                  value={viewerConfig.exposure}
+                  onChange={(e) =>
+                    setViewerConfig(prev => ({ ...prev, exposure: parseFloat(e.target.value) }))
+                  }
+                />
+              </div>
+            </div>
+
             {activeLayer ? (
               <>
                 {/* Material Controls */}
@@ -523,11 +593,11 @@ const ModelStudioTool: React.FC<ModelStudioToolProps> = ({ onBack }) => {
                       <span className="text-[10px] font-bold text-amber-500 uppercase tracking-widest flex items-center gap-2"><LinkIcon className="w-3 h-3" /> Binding</span>
                       <div className="bg-amber-500/5 border border-amber-500/20 p-3 rounded-sm">
                          <div className="text-[9px] text-rv-subtext mb-2 uppercase">Parent Layer</div>
-                         <select 
-                           value={activeLayer.properties.parentId || ""}
-                           onChange={(e) => updateLayerProperty(activeLayer.id, { parentId: e.target.value || undefined })}
-                           className="w-full bg-rv-bg border border-rv-border text-[10px] font-bold text-rv-text p-1.5 outline-none focus:border-amber-500"
-                         >
+                          <select 
+                            value={activeLayer.properties.parentId || ""}
+                            onChange={(e) => setLayerParent(activeLayer.id, e.target.value || undefined)}
+                            className="w-full bg-rv-bg border border-rv-border text-[10px] font-bold text-rv-text p-1.5 outline-none focus:border-amber-500"
+                          >
                             <option value="">None</option>
                             {layers.filter(l => l.id !== activeLayer.id).map(l => (
                                <option key={l.id} value={l.id}>{l.name}</option>

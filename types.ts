@@ -43,6 +43,7 @@ export interface BatchItem {
   name: string;
   identifiedName?: string;
   imageBase64: string;
+  isVisible?: boolean;
   status: 'idle' | 'analyzing' | 'success' | 'error';
   analysis?: NebulaAnalysis;
   detectedParticles: Particle[] | null;
@@ -162,8 +163,6 @@ export interface CompressionSettings {
   targetSize: number;
   targetUnit: SizeUnit;
   outputFormat: 'original' | ImageFormat;
-  preserveMetadata: boolean;
-  maintainAspectRatio: boolean;
 }
 
 export interface CompressorItem {

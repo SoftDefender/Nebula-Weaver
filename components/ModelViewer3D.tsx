@@ -4,6 +4,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { VertexNormalsHelper } from 'three/examples/jsm/helpers/VertexNormalsHelper.js';
 import { ViewerConfig, ModelStudioItem } from '../types';
+import { createRafLoop } from '../services/rafLoop';
+import { getViewerEnvironmentProfile } from '../services/viewerEnvironment';
 
 interface ModelViewer3DProps {
   layers: ModelStudioItem[];
@@ -17,6 +19,11 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ layers, layerObjects, con
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  const lightsRef = useRef<{
+    ambient: THREE.AmbientLight;
+    directional: THREE.DirectionalLight;
+    fill: THREE.PointLight;
+  } | null>(null);
   const helpersRef = useRef<{ 
     grid: THREE.GridHelper, 
     axes: THREE.AxesHelper,
@@ -41,7 +48,7 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ layers, layerObjects, con
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.shadowMap.enabled = true;
@@ -54,7 +61,7 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ layers, layerObjects, con
     controlsRef.current = controls;
 
     // --- Lights ---
-    const ambientLight = new THREE.AmbientLight(0xffffff, config.isProMode ? 0.2 : 0.5);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
     scene.add(ambientLight);
 
     const dirLight = new THREE.DirectionalLight(0xffffff, 1);
@@ -62,11 +69,10 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ layers, layerObjects, con
     dirLight.castShadow = true;
     scene.add(dirLight);
 
-    if (config.isProMode) {
-      const pointLight = new THREE.PointLight(0x3b82f6, 2, 50);
-      pointLight.position.set(-5, 5, -5);
-      scene.add(pointLight);
-    }
+    const fillLight = new THREE.PointLight(0x3b82f6, 0, 50);
+    fillLight.position.set(-5, 5, -5);
+    scene.add(fillLight);
+    lightsRef.current = { ambient: ambientLight, directional: dirLight, fill: fillLight };
 
     // --- Helpers ---
     const grid = new THREE.GridHelper(10, 10, 0x444444, 0x222222);
@@ -81,12 +87,11 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ layers, layerObjects, con
     helpersRef.current = { grid, axes, normals: normalsGroup };
 
     // --- Animation Loop ---
-    const animate = () => {
-      requestAnimationFrame(animate);
+    const renderLoop = createRafLoop(() => {
       controls.update();
       renderer.render(scene, camera);
-    };
-    animate();
+    });
+    renderLoop.start();
 
     const resizeObserver = new ResizeObserver(() => {
       if (!containerRef.current || !camera || !renderer) return;
@@ -94,12 +99,15 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ layers, layerObjects, con
       const height = containerRef.current.clientHeight;
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setSize(width, height);
     });
     resizeObserver.observe(containerRef.current);
 
     return () => {
       resizeObserver.disconnect();
+      renderLoop.stop();
+      controls.dispose();
       renderer.dispose();
       if (containerRef.current) {
         containerRef.current.removeChild(renderer.domElement);
@@ -136,7 +144,6 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ layers, layerObjects, con
           if ((child as THREE.Mesh).isMesh) {
             const mesh = child as THREE.Mesh;
             const mat = mesh.material as THREE.MeshStandardMaterial;
-            mat.wireframe = config.wireframe;
             mat.transparent = layer.properties.opacity < 1.0;
             mat.opacity = layer.properties.opacity;
             mat.color.set(layer.properties.color);
@@ -163,11 +170,7 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ layers, layerObjects, con
       }
     });
 
-    if (scene.background instanceof THREE.Color) {
-      scene.background.set(config.isProMode ? 0x050505 : 0xf4f6f8);
-    }
-
-  }, [layers, layerObjects, config]);
+  }, [layers, layerObjects, config.isProMode, config.showNormals]);
 
   useEffect(() => {
     if (helpersRef.current) {
@@ -180,7 +183,27 @@ const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ layers, layerObjects, con
     if (controlsRef.current) {
       controlsRef.current.autoRotate = config.autoRotate;
     }
-  }, [config]);
+    layers.forEach((layer) => {
+      const obj = layerObjects.get(layer.id);
+      if (!obj) return;
+      obj.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+          mat.wireframe = config.wireframe;
+        }
+      });
+    });
+    if (sceneRef.current && sceneRef.current.background instanceof THREE.Color) {
+      const profile = getViewerEnvironmentProfile(config.environment, config.isProMode);
+      sceneRef.current.background.set(profile.background);
+      if (lightsRef.current) {
+        lightsRef.current.ambient.intensity = profile.ambientIntensity;
+        lightsRef.current.directional.intensity = profile.directionalIntensity;
+        lightsRef.current.fill.color.setHex(profile.fillLightColor);
+        lightsRef.current.fill.intensity = profile.fillLightIntensity;
+      }
+    }
+  }, [config, layers, layerObjects]);
 
   return <div ref={containerRef} className="w-full h-full" />;
 };

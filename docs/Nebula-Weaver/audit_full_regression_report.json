@@ -1,0 +1,307 @@
+{
+  "generatedAt": "2026-04-13T16:17:15.466Z",
+  "steps": [
+    {
+      "name": "audit:phase2",
+      "ok": true,
+      "code": 0,
+      "durationMs": 9688
+    },
+    {
+      "name": "audit:phase4",
+      "ok": true,
+      "code": 0,
+      "durationMs": 19880
+    },
+    {
+      "name": "audit:phase5",
+      "ok": true,
+      "code": 0,
+      "durationMs": 163179
+    },
+    {
+      "name": "audit:phase9",
+      "ok": true,
+      "code": 0,
+      "durationMs": 12566
+    },
+    {
+      "name": "test",
+      "ok": true,
+      "code": 0,
+      "durationMs": 15294
+    },
+    {
+      "name": "typecheck",
+      "ok": true,
+      "code": 0,
+      "durationMs": 19536
+    },
+    {
+      "name": "build",
+      "ok": true,
+      "code": 0,
+      "durationMs": 10975
+    }
+  ],
+  "summary": {
+    "allPassed": true,
+    "passed": 7,
+    "failed": 0
+  },
+  "artifacts": {
+    "phase2": {
+      "generatedAt": "2026-04-13T16:20:44.528Z",
+      "projectRoot": "E:\\CodeProj\\WebAIBox\\Nebula-Weaver",
+      "checks": {
+        "p0_boot_without_gemini_key": {
+          "bootFailed": false,
+          "pageErrors": [],
+          "detail": "No key-related boot error captured in this run."
+        },
+        "p2_empty_queue_canvas_click": {
+          "reproduced": false,
+          "pageErrors": [],
+          "consoleErrors": [],
+          "detail": "No matching error captured in this run.",
+          "normalClickBlockedByOverlay": true,
+          "forcedClickReproduced": false
+        },
+        "p1_export_extension_risk": {
+          "fixedMp4Filename": false,
+          "mediaRecorderSupport": {
+            "available": true,
+            "mp4": true,
+            "mp4H264": false,
+            "webmVp9": true,
+            "matroska": true
+          },
+          "riskLikely": false
+        },
+        "p3_delete_layer_cleanup_gap": {
+          "hasDeleteLayerBlock": true,
+          "deleteLayerHasDispose": false,
+          "deleteLayerHasRevokeObjectURL": false,
+          "deleteLayerCallsCleanupHelper": true,
+          "cleanupHelperHasDispose": true,
+          "cleanupHelperHasRevokeObjectURL": true,
+          "riskConfirmed": false
+        }
+      },
+      "summary": {
+        "allChecksPassed": true
+      }
+    },
+    "phase4": {
+      "generatedAt": "2026-04-13T16:17:26.048Z",
+      "checks": {
+        "home": {
+          "initializeCards": 4,
+          "ok": true
+        },
+        "nebula": {
+          "queuePopulated": true,
+          "downloadCaptured": true,
+          "downloadFile": "nebula_nebula.webm",
+          "pageErrors": [],
+          "ok": true
+        },
+        "modelStudio": {
+          "addDeleteCycles": 3,
+          "finalPrimitiveCount": 0,
+          "pageErrors": [],
+          "ok": true
+        },
+        "photoCompressor": {
+          "nonImageRejected": true,
+          "compressionRan": true,
+          "pageErrors": [],
+          "ok": true
+        },
+        "photoFramer": {
+          "uploadVisible": true,
+          "previewCanvasReady": true,
+          "pageErrors": [],
+          "ok": true
+        }
+      },
+      "summary": {
+        "allChecksPassed": true
+      }
+    },
+    "phase5": {
+      "generatedAt": "2026-04-13T16:17:46.105Z",
+      "checks": {
+        "nebulaExportDefault": {
+          "downloadFile": "nebula_nebula.webm",
+          "pageErrors": [],
+          "ok": true
+        },
+        "nebulaExportNoMp4Support": {
+          "downloadFile": "nebula_nebula.webm",
+          "pageErrors": [],
+          "ok": true
+        },
+        "nebulaCaptureFailureRecovery": {
+          "clickedExport": true,
+          "recovered": true,
+          "pageErrors": [],
+          "ok": true
+        },
+        "modelStudioStress": {
+          "cycles": 30,
+          "finalPrimitiveCount": 0,
+          "heapSamples": [
+            23100000,
+            23100000,
+            23100000,
+            23100000,
+            23100000,
+            23100000
+          ],
+          "pageErrors": [],
+          "ok": true
+        },
+        "modelStudioParentingGuard": {
+          "parentSetBeforeDelete": true,
+          "cycleBlocked": true,
+          "danglingClearedAfterDelete": true,
+          "pageErrors": [],
+          "ok": true
+        },
+        "modelStudioReorderActiveStability": {
+          "activeBeforeMove": 0,
+          "activeAfterMove": 0,
+          "preserved": true,
+          "pageErrors": [],
+          "ok": true
+        },
+        "modelStudioLargeHierarchySnapshot": {
+          "initialLayerCount": 5,
+          "chainCreated": true,
+          "reorderApplied": true,
+          "deleteApplied": true,
+          "danglingCleared": true,
+          "snapshotConsistent": true,
+          "pageErrors": [],
+          "ok": true
+        },
+        "modelStudioLargeHierarchyLongRun": {
+          "targetLayerCount": 12,
+          "targetOperations": 60,
+          "operationsExecuted": 60,
+          "meanOpMs": 485.42,
+          "p95OpMs": 787,
+          "maxOpMs": 2173,
+          "finalLayerCount": 12,
+          "allParentRefsValid": true,
+          "noSelfParent": true,
+          "acyclic": true,
+          "latencyWithinThreshold": true,
+          "pageErrors": [],
+          "ok": true
+        },
+        "photoCompressorHeicFlow": {
+          "compressionRan": true,
+          "downloadFile": "astro_optimized.jpeg",
+          "extensionMatchesBlobType": true,
+          "pageErrors": [],
+          "ok": true
+        },
+        "photoFramerCancelFlow": {
+          "cancelButtonSeen": true,
+          "cancelWorked": true,
+          "pageErrors": [],
+          "ok": true
+        }
+      },
+      "summary": {
+        "allChecksPassed": true
+      }
+    },
+    "phase9": {
+      "generatedAt": "2026-04-13T16:20:29.866Z",
+      "step": "audit:phase9",
+      "command": "npm run perf:star-detection",
+      "runsRequested": 3,
+      "ok": true,
+      "runs": [
+        {
+          "run": 1,
+          "ok": true,
+          "metrics": {
+            "defaultTuning": {
+              "hz": 80.1228,
+              "minMs": 9.3895,
+              "maxMs": 19.8621,
+              "meanMs": 12.4808
+            },
+            "aggressiveTuning": {
+              "hz": 109.91,
+              "minMs": 4.4936,
+              "maxMs": 20.8262,
+              "meanMs": 9.0982
+            },
+            "speedupFactor": 1.37
+          },
+          "output": {
+            "stdoutTail": "> nebula-weaver@0.0.0 perf:star-detection\n> vitest bench tests/starDetectionCore.bench.ts\n RUN  v4.1.1 E:/CodeProj/WebAIBox/Nebula-Weaver\n ✓ tests/starDetectionCore.bench.ts > starDetectionCore benchmark 1337ms\n     name                                hz     min      max     mean      p75      p99     p995     p999      rme  samples\n   · default tuning                 80.1228  9.3895  19.8621  12.4808  12.8826  19.8621  19.8621  19.8621   ±6.50%       41\n   · aggressive performance tuning   109.91  4.4936  20.8262   9.0982  10.9031  20.8262  20.8262  20.8262  ±10.67%       55\n BENCH  Summary\n  aggressive performance tuning - tests/starDetectionCore.bench.ts > starDetectionCore benchmark\n    1.37x faster than default tuning",
+            "stderrTail": "Benchmarking is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+          }
+        },
+        {
+          "run": 2,
+          "ok": true,
+          "metrics": {
+            "defaultTuning": {
+              "hz": 83.6568,
+              "minMs": 7.0896,
+              "maxMs": 23.958,
+              "meanMs": 11.9536
+            },
+            "aggressiveTuning": {
+              "hz": 109.19,
+              "minMs": 6.173,
+              "maxMs": 15.4707,
+              "meanMs": 9.1579
+            },
+            "speedupFactor": 1.31
+          },
+          "output": {
+            "stdoutTail": "> nebula-weaver@0.0.0 perf:star-detection\n> vitest bench tests/starDetectionCore.bench.ts\n RUN  v4.1.1 E:/CodeProj/WebAIBox/Nebula-Weaver\n ✓ tests/starDetectionCore.bench.ts > starDetectionCore benchmark 1330ms\n     name                                hz     min      max     mean      p75      p99     p995     p999     rme  samples\n   · default tuning                 83.6568  7.0896  23.9580  11.9536  13.5627  23.9580  23.9580  23.9580  ±9.02%       42\n   · aggressive performance tuning   109.19  6.1730  15.4707   9.1579  10.3148  15.4707  15.4707  15.4707  ±6.21%       55\n BENCH  Summary\n  aggressive performance tuning - tests/starDetectionCore.bench.ts > starDetectionCore benchmark\n    1.31x faster than default tuning",
+            "stderrTail": "Benchmarking is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+          }
+        },
+        {
+          "run": 3,
+          "ok": true,
+          "metrics": {
+            "defaultTuning": {
+              "hz": 85.8882,
+              "minMs": 5.7216,
+              "maxMs": 17.4768,
+              "meanMs": 11.643
+            },
+            "aggressiveTuning": {
+              "hz": 113.75,
+              "minMs": 5.6793,
+              "maxMs": 17.0581,
+              "meanMs": 8.7915
+            },
+            "speedupFactor": 1.32
+          },
+          "output": {
+            "stdoutTail": "> nebula-weaver@0.0.0 perf:star-detection\n> vitest bench tests/starDetectionCore.bench.ts\n RUN  v4.1.1 E:/CodeProj/WebAIBox/Nebula-Weaver\n ✓ tests/starDetectionCore.bench.ts > starDetectionCore benchmark 1334ms\n     name                                hz     min      max     mean      p75      p99     p995     p999     rme  samples\n   · default tuning                 85.8882  5.7216  17.4768  11.6430  14.5411  17.4768  17.4768  17.4768  ±8.63%       43\n   · aggressive performance tuning   113.75  5.6793  17.0581   8.7915   9.2694  17.0581  17.0581  17.0581  ±7.75%       57\n BENCH  Summary\n  aggressive performance tuning - tests/starDetectionCore.bench.ts > starDetectionCore benchmark\n    1.32x faster than default tuning",
+            "stderrTail": "Benchmarking is an experimental feature.\nBreaking changes might not follow SemVer, please pin Vitest's version when using it."
+          }
+        }
+      ],
+      "aggregated": {
+        "successfulRuns": 3,
+        "medianSpeedupFactor": 1.32,
+        "medianDefaultMeanMs": 11.9536,
+        "medianAggressiveMeanMs": 9.0982
+      }
+    }
+  }
+}

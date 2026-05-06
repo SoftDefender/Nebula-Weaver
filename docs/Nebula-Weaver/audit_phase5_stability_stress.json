@@ -1,0 +1,90 @@
+{
+  "generatedAt": "2026-04-13T16:17:46.105Z",
+  "checks": {
+    "nebulaExportDefault": {
+      "downloadFile": "nebula_nebula.webm",
+      "pageErrors": [],
+      "ok": true
+    },
+    "nebulaExportNoMp4Support": {
+      "downloadFile": "nebula_nebula.webm",
+      "pageErrors": [],
+      "ok": true
+    },
+    "nebulaCaptureFailureRecovery": {
+      "clickedExport": true,
+      "recovered": true,
+      "pageErrors": [],
+      "ok": true
+    },
+    "modelStudioStress": {
+      "cycles": 30,
+      "finalPrimitiveCount": 0,
+      "heapSamples": [
+        23100000,
+        23100000,
+        23100000,
+        23100000,
+        23100000,
+        23100000
+      ],
+      "pageErrors": [],
+      "ok": true
+    },
+    "modelStudioParentingGuard": {
+      "parentSetBeforeDelete": true,
+      "cycleBlocked": true,
+      "danglingClearedAfterDelete": true,
+      "pageErrors": [],
+      "ok": true
+    },
+    "modelStudioReorderActiveStability": {
+      "activeBeforeMove": 0,
+      "activeAfterMove": 0,
+      "preserved": true,
+      "pageErrors": [],
+      "ok": true
+    },
+    "modelStudioLargeHierarchySnapshot": {
+      "initialLayerCount": 5,
+      "chainCreated": true,
+      "reorderApplied": true,
+      "deleteApplied": true,
+      "danglingCleared": true,
+      "snapshotConsistent": true,
+      "pageErrors": [],
+      "ok": true
+    },
+    "modelStudioLargeHierarchyLongRun": {
+      "targetLayerCount": 12,
+      "targetOperations": 60,
+      "operationsExecuted": 60,
+      "meanOpMs": 485.42,
+      "p95OpMs": 787,
+      "maxOpMs": 2173,
+      "finalLayerCount": 12,
+      "allParentRefsValid": true,
+      "noSelfParent": true,
+      "acyclic": true,
+      "latencyWithinThreshold": true,
+      "pageErrors": [],
+      "ok": true
+    },
+    "photoCompressorHeicFlow": {
+      "compressionRan": true,
+      "downloadFile": "astro_optimized.jpeg",
+      "extensionMatchesBlobType": true,
+      "pageErrors": [],
+      "ok": true
+    },
+    "photoFramerCancelFlow": {
+      "cancelButtonSeen": true,
+      "cancelWorked": true,
+      "pageErrors": [],
+      "ok": true
+    }
+  },
+  "summary": {
+    "allChecksPassed": true
+  }
+}

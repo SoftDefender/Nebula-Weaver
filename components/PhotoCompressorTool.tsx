@@ -18,6 +18,7 @@ import {
 } from '@heroicons/react/24/solid';
 import { CompressorItem, CompressionSettings, ImageFormat, SizeUnit } from '../types';
 import { compressImageToTarget } from '../services/compressorService';
+import { resolveCompressedFilename } from '../services/compressorNaming';
 
 interface PhotoCompressorToolProps {
   onBack: () => void;
@@ -33,9 +34,7 @@ const PhotoCompressorTool: React.FC<PhotoCompressorToolProps> = ({ onBack }) => 
   const [settings, setSettings] = useState<CompressionSettings>({
     targetSize: 500,
     targetUnit: 'KB',
-    outputFormat: 'original',
-    preserveMetadata: false,
-    maintainAspectRatio: true
+    outputFormat: 'original'
   });
 
   useEffect(() => {
@@ -132,10 +131,7 @@ const PhotoCompressorTool: React.FC<PhotoCompressorToolProps> = ({ onBack }) => 
         const url = URL.createObjectURL(item.resultBlob);
         const a = document.createElement('a');
         a.href = url;
-        const ext = settings.outputFormat === 'original' 
-          ? item.file.name.split('.').pop() 
-          : settings.outputFormat.split('/')[1];
-        a.download = `${item.file.name.split('.')[0]}_optimized.${ext}`;
+        a.download = resolveCompressedFilename(item.file.name, settings, item.resultBlob.type);
         a.click();
         URL.revokeObjectURL(url);
       }

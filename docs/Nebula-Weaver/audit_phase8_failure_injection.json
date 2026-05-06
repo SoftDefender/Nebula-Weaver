@@ -1,0 +1,41 @@
+{
+  "generatedAt": "2026-03-26T02:10:07.438Z",
+  "scenarios": [
+    {
+      "name": "Inject failure in phase2",
+      "command": "npm run audit:phase2",
+      "expectedStep": "audit:phase2",
+      "code": 1,
+      "durationMs": 11517,
+      "ok": true,
+      "evidence": "code=1, phase2.summary=false, injected=true"
+    },
+    {
+      "name": "Inject failure in phase4",
+      "command": "npm run audit:phase4",
+      "expectedStep": "audit:phase4",
+      "code": 1,
+      "durationMs": 17703,
+      "ok": true,
+      "evidence": "code=1, phase4.summary=false, injected=true"
+    },
+    {
+      "name": "Inject failure propagation in audit:full",
+      "command": "npm run audit:full",
+      "expectedStep": "audit:phase5",
+      "code": 1,
+      "durationMs": 91706,
+      "ok": true,
+      "evidence": "code=1, full.allPassed=false, failedStep=audit:phase5, hasFailureMessage=true"
+    }
+  ],
+  "baselineRestore": {
+    "ok": true,
+    "code": 0
+  },
+  "summary": {
+    "passed": 3,
+    "failed": 0,
+    "allPassed": true
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "generatedAt": "2026-04-13T16:20:44.528Z",
+  "projectRoot": "E:\\CodeProj\\WebAIBox\\Nebula-Weaver",
+  "checks": {
+    "p0_boot_without_gemini_key": {
+      "bootFailed": false,
+      "pageErrors": [],
+      "detail": "No key-related boot error captured in this run."
+    },
+    "p2_empty_queue_canvas_click": {
+      "reproduced": false,
+      "pageErrors": [],
+      "consoleErrors": [],
+      "detail": "No matching error captured in this run.",
+      "normalClickBlockedByOverlay": true,
+      "forcedClickReproduced": false
+    },
+    "p1_export_extension_risk": {
+      "fixedMp4Filename": false,
+      "mediaRecorderSupport": {
+        "available": true,
+        "mp4": true,
+        "mp4H264": false,
+        "webmVp9": true,
+        "matroska": true
+      },
+      "riskLikely": false
+    },
+    "p3_delete_layer_cleanup_gap": {
+      "hasDeleteLayerBlock": true,
+      "deleteLayerHasDispose": false,
+      "deleteLayerHasRevokeObjectURL": false,
+      "deleteLayerCallsCleanupHelper": true,
+      "cleanupHelperHasDispose": true,
+      "cleanupHelperHasRevokeObjectURL": true,
+      "riskConfirmed": false
+    }
+  },
+  "summary": {
+    "allChecksPassed": true
+  }
+}

@@ -18,6 +18,20 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      build: {
+        chunkSizeWarningLimit: 900,
+        rollupOptions: {
+          output: {
+            manualChunks(id) {
+              if (!id.includes('node_modules')) return undefined;
+              if (id.includes('three')) return 'vendor-three';
+              if (id.includes('@google/genai')) return 'vendor-genai';
+              if (id.includes('jszip')) return 'vendor-jszip';
+              return undefined;
+            }
+          }
+        }
       }
     };
 });

@@ -1,12 +1,49 @@
-
-import { GoogleGenAI, Type } from "@google/genai";
 import { NebulaAnalysis } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+type GeminiSdk = typeof import("@google/genai");
+type GoogleGenAIInstance = import("@google/genai").GoogleGenAI;
+
+let aiClient: GoogleGenAIInstance | null = null;
+let sdkPromise: Promise<GeminiSdk> | null = null;
+let hasWarnedMissingKey = false;
+
+const loadGeminiSdk = async (): Promise<GeminiSdk> => {
+  if (!sdkPromise) {
+    sdkPromise = import("@google/genai");
+  }
+  return sdkPromise;
+};
+
+const getAiClient = async (): Promise<GoogleGenAIInstance | null> => {
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    if (!hasWarnedMissingKey) {
+      console.warn("GEMINI_API_KEY is missing. Gemini features are disabled.");
+      hasWarnedMissingKey = true;
+    }
+    return null;
+  }
+
+  if (aiClient) {
+    return aiClient;
+  }
+
+  try {
+    const { GoogleGenAI } = await loadGeminiSdk();
+    aiClient = new GoogleGenAI({ apiKey });
+    return aiClient;
+  } catch (e) {
+    console.error("Failed to initialize Gemini client", e);
+    return null;
+  }
+};
 
 // Fast identification step - runs immediately on upload
 export const identifyNebulaFromImage = async (imageBase64: string): Promise<string> => {
   try {
+    const ai = await getAiClient();
+    if (!ai) return "Unknown Nebula";
+
     const base64Data = imageBase64.split(',')[1] || imageBase64;
     const response = await ai.models.generateContent({
       // Use gemini-3-flash-preview for speed and efficiency in identification tasks
@@ -30,6 +67,16 @@ export const analyzeNebulaImage = async (
   nebulaName: string
 ): Promise<NebulaAnalysis> => {
   try {
+    const ai = await getAiClient();
+    if (!ai) {
+      return {
+        description: "A mysterious cosmic cloud.",
+        dominantColors: ["#ffffff", "#ffd700"],
+        starHotspots: [],
+      };
+    }
+    const { Type } = await loadGeminiSdk();
+
     const prompt = `
       Analyze this image of the nebula named "${nebulaName}".
       1. Short poetic description (max 15 words).
